@@ -1,5 +1,7 @@
 # 运维网络基础笔记
 
+归档分类：学习总结。
+
 适用环境：CentOS 7 虚拟机，VMware NAT 网络。
 
 你的当前环境：
@@ -823,4 +825,3 @@ sudo systemctl status nginx
 curl -I http://192.168.6.100
 sudo tail -n 20 /var/log/nginx/error.log
 ```
-

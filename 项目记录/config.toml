@@ -1,3 +1,4 @@
+# 项目保留的 Codex 配置记录。实际运行权限仍以应用下发的托管权限为准。
 sandbox_mode = "danger-full-access"
 
 approval_policy = "never"

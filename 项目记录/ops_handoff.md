@@ -1,5 +1,7 @@
 # 运维学习交接文件
 
+归档位置：`项目记录/ops_handoff.md`。
+
 用途：重开 Codex 线程、切换到 DeepSeek/GLM/Claude Code，或之后复习时，让新模型快速接上当前学习进度。
 
 最后更新：2026-07-11
@@ -70,16 +72,16 @@
 文件分工：
 
 ```text
-.codex/memory.md
+项目记录/memory.md
   -> 记录长期上下文、当前进度、用户偏好、下一步方向。
 
-ops_handoff.md
+项目记录/ops_handoff.md
   -> 给新线程/其他模型看的交接文件，必须能让对方快速知道当前路线和下一步。
 
-ops_command_history.md
+项目记录/ops_command_history.md
   -> 记录已经实际敲过的命令、关键输出、学到的结论，避免其他模型重复旧练习或误判基础。
 
-ops_模块名.md
+学习总结/ops_模块名.md
   -> 每个模块的系统复习笔记，例如 network/shell/crontab/nginx/mysql。
 ```
 
@@ -454,29 +456,29 @@ C:\Users\陈伟钜\Documents\Codex\2026-06-13\new-chat
 核心记忆文件：
 
 ```text
-C:\Users\陈伟钜\Documents\Codex\2026-06-13\new-chat\.codex\memory.md
+C:\Users\陈伟钜\Documents\Codex\2026-06-13\new-chat\项目记录\memory.md
 ```
 
 复习笔记：
 
 ```text
-C:\Users\陈伟钜\Documents\Codex\2026-06-13\new-chat\ops_network_basics.md
-C:\Users\陈伟钜\Documents\Codex\2026-06-13\new-chat\ops_shell_basics.md
-C:\Users\陈伟钜\Documents\Codex\2026-06-13\new-chat\ops_crontab_basics.md
-C:\Users\陈伟钜\Documents\Codex\2026-06-13\new-chat\ops_nginx_reverse_proxy.md
-C:\Users\陈伟钜\Documents\Codex\2026-06-13\new-chat\ops_nginx_stage1.md
-C:\Users\陈伟钜\Documents\Codex\2026-06-13\new-chat\ops_mysql_basics.md
-C:\Users\陈伟钜\Documents\Codex\2026-06-13\new-chat\ops_command_history.md
-C:\Users\陈伟钜\Documents\Codex\2026-06-13\new-chat\ops_handoff.md
+C:\Users\陈伟钜\Documents\Codex\2026-06-13\new-chat\学习总结\ops_network_basics.md
+C:\Users\陈伟钜\Documents\Codex\2026-06-13\new-chat\学习总结\ops_shell_basics.md
+C:\Users\陈伟钜\Documents\Codex\2026-06-13\new-chat\学习总结\ops_crontab_basics.md
+C:\Users\陈伟钜\Documents\Codex\2026-06-13\new-chat\学习总结\ops_nginx_reverse_proxy.md
+C:\Users\陈伟钜\Documents\Codex\2026-06-13\new-chat\学习总结\ops_nginx_stage1.md
+C:\Users\陈伟钜\Documents\Codex\2026-06-13\new-chat\学习总结\ops_mysql_basics.md
+C:\Users\陈伟钜\Documents\Codex\2026-06-13\new-chat\项目记录\ops_command_history.md
+C:\Users\陈伟钜\Documents\Codex\2026-06-13\new-chat\项目记录\ops_handoff.md
 ```
 
 读取顺序建议：
 
 ```text
-1. ops_handoff.md
-2. .codex/memory.md
-3. ops_command_history.md
-4. 当前模块笔记，当前是 ops_mysql_basics.md
+1. 项目记录/ops_handoff.md
+2. 项目记录/memory.md
+3. 项目记录/ops_command_history.md
+4. 当前模块笔记，当前是 学习总结/ops_mysql_basics.md
 5. 如果缺前置知识，再读 network/shell/crontab 笔记
 ```
 
@@ -719,7 +721,7 @@ MySQL 系统运维第一节。
 我正在从零学习 Linux 运维/云运维，目标是明年能找运维实习。
 
 请先读取：
-C:\Users\陈伟钜\Documents\Codex\2026-06-13\new-chat\ops_handoff.md
+C:\Users\陈伟钜\Documents\Codex\2026-06-13\new-chat\项目记录\ops_handoff.md
 
 如果你不能读取文件，我会把内容贴给你。
 

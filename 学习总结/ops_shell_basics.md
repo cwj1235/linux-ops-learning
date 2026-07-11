@@ -1,5 +1,7 @@
 # 运维 Shell 基础笔记
 
+归档分类：学习总结。
+
 学习主线：围绕 `/opt/scripts/check_nginx.sh` 这个 Nginx 健康检查脚本理解 Shell 语法。
 
 脚本目标：
@@ -941,4 +943,3 @@ sudo tail -n 20 /var/log/nginx_check.log
 再正式执行
 最后看日志确认结果
 ```
-

@@ -4,6 +4,8 @@
 
 范围：本文件只属于当前 Linux 运维与云运维学习项目。
 
+归档位置：`项目记录/memory.md`。
+
 ## 稳定背景
 
 - 用户是本科生，正在从零学习 Linux 运维与云运维，目标是明年具备寻找运维实习的能力。
@@ -195,19 +197,28 @@ MySQL 用户权限、最小权限、GRANT、REVOKE 验证：完成
 - 已用 `git status` 验证：当前位于 `main` 分支，提交完成时工作区为 `working tree clean`。
 - Git 仓库初始化任务已经完成；后续学习笔记发生变化时，使用 `git status → git add → git commit` 保存新版本。
 
+## 2026-07-11 项目文件归档
+
+- 根目录只保留 `README.md`、`AGENTS.md`、`.gitignore` 和 `.gitattributes` 等项目入口与 Git 规则文件。
+- 六份模块笔记已统一移动到 `学习总结/`。
+- `memory.md`、`ops_handoff.md`、`ops_command_history.md` 和 `config.toml` 已统一移动到 `项目记录/`。
+- `AGENTS.md` 已改为读取和维护 `项目记录/memory.md`，并同步更新交接、命令履历和模块笔记路径。
+- 已创建中文 `README.md`，提供目录结构、文件职责、阅读顺序、当前进度和 Git 使用方法。
+- 两个归档目录都位于项目可写工作区内，文件可以正常读取、修改、移动和通过 Git 管理。
+
 ## 项目记录文件分工
 
 ```text
-memory.md
+项目记录/memory.md
   → 长期项目背景、稳定偏好、准确进度和下一步。
 
-ops_handoff.md
+项目记录/ops_handoff.md
   → 新线程或其他模型接手时的交接文件。
 
-ops_command_history.md
+项目记录/ops_command_history.md
   → 用户实际执行过的命令、关键输出和结论。
 
-ops_模块名.md
+学习总结/ops_模块名.md
   → 各模块的系统复习笔记。
 ```
 
