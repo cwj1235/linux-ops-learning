@@ -191,7 +191,9 @@ MySQL 用户权限、最小权限、GRANT、REVOKE 验证：完成
 - 已创建 `.gitattributes`，统一 Markdown、配置文件和 Shell 脚本使用 Linux 的 LF 换行格式。
 - 已执行 `git add .` 和 `git add --renormalize .`，当前 13 个项目文件均已进入暂存区。
 - 当前仓库已配置本地作者身份：`陈伟钜 <cwj@localhost>`，只作用于本仓库，不使用真实邮箱。
-- 下一步：创建第一次提交，然后用 `git status` 验证工作区干净。
+- 已创建第一次提交：`35ec417 初始化运维学习项目`，共提交 13 个文件。
+- 已用 `git status` 验证：当前位于 `main` 分支，提交完成时工作区为 `working tree clean`。
+- Git 仓库初始化任务已经完成；后续学习笔记发生变化时，使用 `git status → git add → git commit` 保存新版本。
 
 ## 项目记录文件分工
 

@@ -979,3 +979,30 @@ SHOW GRANTS 看配置，实际执行 SQL 验证真实效果。
 MySQL 常见故障排查小练习，然后完成 MySQL 第一阶段总结。
 ```
 
+## 14. 2026-07-11 项目 Git 仓库初始化
+
+当前项目目录已初始化为本地 Git 仓库：
+
+```text
+分支：main
+本地作者：陈伟钜 <cwj@localhost>
+第一次提交：35ec417 初始化运维学习项目
+提交文件数：13
+提交完成状态：nothing to commit, working tree clean
+```
+
+已配置：
+
+```text
+.gitignore：排除系统、编辑器、临时文件、环境变量和 Codex 本地隐藏运行目录。
+.gitattributes：Markdown、配置和 Shell 脚本统一使用 LF 换行。
+```
+
+后续保存学习文件版本的基本流程：
+
+```text
+git status
+git add 文件名
+git commit -m "中文提交说明"
+```
+

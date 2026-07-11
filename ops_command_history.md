@@ -1176,6 +1176,8 @@ git status
 git config user.name "陈伟钜"
 git config user.email "cwj@localhost"
 git config --local --list
+git commit -m "初始化运维学习项目"
+git status
 ```
 
 看到过：
@@ -1198,5 +1200,8 @@ git add . 把项目文件加入暂存区，但还没有创建正式版本。
 git add --renormalize . 按照换行规则重新规范暂存区文件。
 当前 13 个项目文件已经进入 Changes to be committed，下一步创建第一次提交。
 当前仓库已设置本地作者身份 `陈伟钜 <cwj@localhost>`，不使用 `--global`，不会影响其他仓库。
+第一次提交成功：`35ec417 初始化运维学习项目`。
+第一次提交包含 13 个文件，共记录 8521 行新增内容。
+提交后 `git status` 显示 `nothing to commit, working tree clean`。
 ```
 
