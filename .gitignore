@@ -1,0 +1,29 @@
+# Windows 系统文件
+Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# 编辑器临时文件
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# 通用临时文件和日志
+*.tmp
+*.temp
+*.log
+
+# Python 缓存（以后写运维脚本时可能出现）
+__pycache__/
+*.py[cod]
+
+# 本地环境变量和敏感配置
+.env
+.env.*
+!.env.example
+
+# Codex 本地隐藏运行目录
+.codex/
+.agents/
