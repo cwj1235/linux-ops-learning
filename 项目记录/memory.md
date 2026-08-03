@@ -197,6 +197,20 @@ MySQL 用户权限、最小权限、GRANT、REVOKE 验证：完成
 - 已用 `git status` 验证：当前位于 `main` 分支，提交完成时工作区为 `working tree clean`。
 - Git 仓库初始化任务已经完成；后续学习笔记发生变化时，使用 `git status → git add → git commit` 保存新版本。
 
+## 2026-08-03 Git 提交记录复查
+
+- 当前仓库共有 3 次提交，均为 2026-07-11 创建：
+
+```text
+35ec417  初始化运维学习项目     （13 个文件，新增 8521 行）
+298ebbd  记录 Git 仓库初始化结果
+3ab09d2  整理项目目录结构       （笔记移入 学习总结/，记录移入 项目记录/，新增 README.md 和中文归档结构）
+```
+
+- 当前分支 `main`，工作区 `working tree clean`。
+- `git ls-files` 共跟踪 14 个文件：README、AGENTS、.gitignore、.gitattributes、学习总结 6 篇、项目记录 4 个。
+- 无远程仓库、无 tag、未启用任何 Git 钩子。
+
 ## 2026-07-11 项目文件归档
 
 - 根目录只保留 `README.md`、`AGENTS.md`、`.gitignore` 和 `.gitattributes` 等项目入口与 Git 规则文件。
