@@ -341,3 +341,11 @@ GitHub Actions 或同类流水线，实现测试、构建、镜像或发布、�
 - 使用 `git merge git-practice` 将练习提交合并到 `main`，实际结果为 `Fast-forward`。
 - 已使用 `git branch --merged` 和 `git branch -d git-practice` 清理已合并分支，当前仅保留 `main`。
 - 下一步：演练两个分支修改同一内容时产生的合并冲突。
+
+## 2026-09-08 Git 合并冲突复习
+
+- 创建 `conflict-a` 和 `conflict-b`，让两个分支修改同一个文件的同一行，成功触发 `CONFLICT (content)`。
+- 已查看 `<<<<<<< HEAD`、`=======`、`>>>>>>> conflict-b` 冲突标记，并手动保留“部署状态：维护中”。
+- 使用 `git add` 标记冲突解决，提交合并结果 `28b57d6`。
+- 使用 `git switch main` 和 `git branch -D conflict-a conflict-b` 清理临时分支，当前仅保留 `main`，工作区干净。
+- Git 分支基础、Fast-forward 合并和冲突处理已完成；下一步学习 `.gitignore` 和远程仓库。

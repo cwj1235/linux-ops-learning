@@ -1,0 +1,88 @@
+# Git 基础复习
+
+## 本节位置
+
+本节属于 Git/GitHub 与自动化脚本阶段，承接 Linux 运维学习项目的脚本、配置和故障记录管理。
+
+## 1. Git 三个区域
+
+```text
+工作区：实际编辑的文件。
+暂存区：通过 git add 准备提交的内容。
+版本库：通过 git commit 保存的历史版本，位于 .git 中。
+```
+
+常用流程：
+
+```text
+修改文件 -> git diff -> git add -> git diff --cached -> git commit
+```
+
+## 2. 查看和撤销
+
+```powershell
+git status
+git diff
+git diff --cached
+git show --stat --oneline HEAD
+git show HEAD -- README.md
+git diff HEAD~1 HEAD
+git diff HEAD
+git restore README.md
+git restore --staged README.md
+```
+
+```text
+git diff：查看未暂存修改。
+git diff --cached：查看已暂存修改。
+git show：查看提交及其内容。
+git restore 文件：丢弃工作区未提交修改。
+git restore --staged 文件：取消暂存但保留文件修改。
+```
+
+## 3. 分支和合并
+
+已验证：
+
+```text
+创建 git-practice 分支并提交 da254fb。
+切回 main 后确认练习内容未立即出现。
+git merge git-practice 返回 Fast-forward。
+删除已合并的练习分支。
+```
+
+分支用于隔离开发和实验；合并后目标分支才包含源分支提交。
+
+## 4. 合并冲突
+
+当两个分支修改同一个文件的同一部分时，Git 可能无法自动合并。
+
+冲突标记：
+
+```text
+<<<<<<< HEAD
+当前分支内容
+=======
+被合并分支内容
+>>>>>>> branch-name
+```
+
+处理流程：
+
+```text
+git merge branch-name
+查看冲突文件
+手动保留正确内容并删除冲突标记
+git add 文件
+git commit
+```
+
+本次保留了“部署状态：维护中”，生成合并提交 `28b57d6`，之后删除了临时冲突分支。
+
+## 5. 换行提示
+
+```text
+CRLF will be replaced by LF
+```
+
+这是 Git 根据 `.gitattributes` 统一文本换行格式的提示，不是提交失败。

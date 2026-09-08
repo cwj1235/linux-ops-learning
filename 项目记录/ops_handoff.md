@@ -1123,3 +1123,11 @@ Linux 运维强化基础检查已经完成。下一步可先做一次阶段复�
 - 执行 `git merge git-practice`，结果为 `Fast-forward`，随后用 `git branch -d git-practice` 删除已合并分支。
 - 当前分支为 `main`，下一步进入合并冲突演练。
 
+## 2026-09-08 Git 合并冲突复习
+
+- 已创建两个临时分支并修改同一文件同一行，实际触发内容冲突。
+- 已理解 `<<<<<<< HEAD`、`=======`、`>>>>>>> branch-name` 的含义。
+- 手动保留正确内容后执行 `git add` 和 `git commit`，生成合并提交 `28b57d6`。
+- 已删除 `conflict-a` 和 `conflict-b`，当前分支为 `main`，工作区干净。
+- Git 分支和合并冲突基础完成；下一步进入 `.gitignore` 与远程仓库。
+

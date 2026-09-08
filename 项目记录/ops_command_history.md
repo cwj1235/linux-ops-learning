@@ -1302,3 +1302,39 @@ git merge git-practice 返回 Fast-forward。
 合并后 main 和 git-practice 曾共同指向 da254fb。
 删除已合并分支后当前仅保留 main。
 ```
+
+## 2026-09-08 Git 合并冲突演练
+
+执行并验证：
+
+```powershell
+git switch -c conflict-a
+Set-Content -Path .\git-conflict-demo.txt -Value "部署状态：正常"
+git add git-conflict-demo.txt
+git commit -m "添加冲突演练文件"
+git switch -c conflict-b
+Set-Content -Path .\git-conflict-demo.txt -Value "部署状态：异常"
+git add git-conflict-demo.txt
+git commit -m "在冲突分支修改部署状态"
+git switch conflict-a
+Set-Content -Path .\git-conflict-demo.txt -Value "部署状态：维护中"
+git add git-conflict-demo.txt
+git commit -m "在主冲突分支修改部署状态"
+git merge conflict-b
+Get-Content .\git-conflict-demo.txt
+git add git-conflict-demo.txt
+git commit -m "完成合并冲突演练"
+git switch main
+git branch -D conflict-a conflict-b
+git branch
+git status
+```
+
+关键结果：
+
+```text
+产生 CONFLICT (content)。
+解决后生成合并提交 28b57d6。
+最终文件内容为“部署状态：维护中”。
+当前仅保留 main，工作区 clean。
+```
