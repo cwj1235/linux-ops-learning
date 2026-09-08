@@ -1275,3 +1275,30 @@ Linux 巡检脚本首版已跑通。
 301：永久重定向；302：临时重定向；304：使用缓存；429：请求过于频繁。
 综合题 403/404/502/504 -> B-C-D-A，全部正确。
 ```
+
+## 2026-09-08 Git 分支基础复习
+
+执行并验证：
+
+```powershell
+git branch
+git switch -c git-practice
+git branch --show-current
+Add-Content -Path .\README.md -Value "`nGit 分支练习记录。"
+git add README.md
+git commit -m "练习Git分支提交"
+git switch main
+git merge git-practice
+git branch --merged
+git branch -d git-practice
+git branch
+```
+
+关键结果：
+
+```text
+git-practice 提交为 da254fb。
+git merge git-practice 返回 Fast-forward。
+合并后 main 和 git-practice 曾共同指向 da254fb。
+删除已合并分支后当前仅保留 main。
+```

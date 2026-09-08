@@ -1115,3 +1115,11 @@ Linux 运维强化基础检查已经完成。下一步可先做一次阶段复�
 - 综合题 `403/404/502/504` 回答 `B-C-D-A`，全部正确。
 - 状态码复习完成；后续继续 Git/GitHub 和运维脚本版本管理。
 
+## 2026-09-08 Git 分支基础复习
+
+- 已验证工作区、暂存区、版本库和撤销操作：`git diff`、`git add`、`git diff --cached`、`git restore`、`git restore --staged`。
+- 创建 `git-practice` 分支并提交 `da254fb 练习Git分支提交`。
+- 切回 `main` 验证练习内容未立即出现在主线。
+- 执行 `git merge git-practice`，结果为 `Fast-forward`，随后用 `git branch -d git-practice` 删除已合并分支。
+- 当前分支为 `main`，下一步进入合并冲突演练。
+

@@ -332,3 +332,12 @@ GitHub Actions 或同类流水线，实现测试、构建、镜像或发布、�
 - 已理解 `301` 永久重定向、`302` 临时重定向、`304` 使用缓存、`429` 请求过于频繁。
 - 综合题 `403/404/502/504` 对应关系回答为 `B-C-D-A`，全部正确。
 - 当前状态：常见 HTTP 状态码基础复习完成，下一步可继续 Git/GitHub 与运维脚本版本管理。
+
+## 2026-09-08 Git 分支基础复习
+
+- 在 PowerShell 项目仓库中验证了 `git status`、`git diff`、`git diff --cached`、`git show` 和 `git diff HEAD~1 HEAD`。
+- 已理解工作区、暂存区、版本库，以及 `git restore` 和 `git restore --staged` 的区别。
+- 创建并切换到 `git-practice`，在该分支提交 `da254fb`，再切回 `main` 验证分支隔离。
+- 使用 `git merge git-practice` 将练习提交合并到 `main`，实际结果为 `Fast-forward`。
+- 已使用 `git branch --merged` 和 `git branch -d git-practice` 清理已合并分支，当前仅保留 `main`。
+- 下一步：演练两个分支修改同一内容时产生的合并冲突。
