@@ -48,19 +48,16 @@
 ## 学习路线
 
 ```text
-Linux 基础
-→ 网络基础
-→ Shell
-→ crontab
-→ Nginx
-→ MySQL/MariaDB
-→ Redis
-→ 月度综合练习
-→ 云服务器真实部署
-→ Docker 与 Docker Compose
-→ 监控、日志和告警
-→ 简单 CI/CD
-→ 项目文档、简历、面试与实习准备
+阶段 0：已学内容复习与能力体检
+→ 阶段 1：Linux 运维强化
+→ 阶段 2：Git/GitHub 与运维脚本（Shell + 必要 Python）
+→ 阶段 3：Nginx、MySQL/MariaDB、Redis 服务运维
+→ 阶段 4：Docker 与 Docker Compose
+→ 阶段 5：Ansible 自动化部署
+→ 阶段 6：监控、日志、告警与故障响应
+→ 阶段 7：云服务器、安全组、域名、HTTPS 和备份
+→ 阶段 8：基础 CI/CD
+→ 阶段 9：综合项目、文档、简历和面试
 ```
 
 ## 当前虚拟机环境
@@ -178,11 +175,75 @@ MySQL 用户权限、最小权限、GRANT、REVOKE 验证：完成
 ## 下一步
 
 ```text
-1. 建立 MariaDB 正常状态基线：服务、3306 端口、SQL 查询。
-2. 进行 MySQL 常见故障排查小练习。
-3. 完成 MySQL 第一阶段总结。
-4. 进入 Redis 系统运维。
-5. 完成 Shell + Nginx + MySQL + Redis 月度综合练习。
+旧的“MySQL 故障排查 -> Redis”顺序暂停直接推进。
+
+新的主线：
+1. 先评估现有运维学习方向是否符合运维实习目标。
+2. 对 Linux、网络、Shell、crontab、Nginx、MySQL 做一轮实操复习和能力体检。
+3. 根据体检结果补缺，不按课程章节机械重学。
+4. 再安排 Redis、Git/GitHub、Docker/Compose、Ansible、监控、云服务器和综合项目。
+5. 最终形成可用于简历、面试和实习投递的项目证据。
+```
+
+## 2026-08-26 路线重新评估
+
+- 用户要求重新判断当前 Linux/云运维学习方向是否适合未来寻找运维实习，并修正不合理之处。
+- 用户要求先复习前面已经学过的内容，再继续新模块。
+- 复习方式继续遵守：概念 -> 少量命令 -> 用户执行 -> 根据真实输出判断 -> 故障题 -> 总结。
+- 复习不是从零重讲，而是通过状态检查、命令默写、真实故障排查和小任务确认是否真正掌握。
+- 当前项目上下文只能读取本目录的 `项目记录/` 与 `学习总结/`，不得混入其他项目目录的记忆。
+
+### 已确定的路线调整
+
+- 现有方向总体正确，但原路线缺少 Git/GitHub、Python 运维自动化、Docker/Compose、Ansible、监控告警、云服务器安全和 CI/CD，因此不能只按“MySQL -> Redis”继续。
+- 前面 Linux、网络、Shell、crontab、Nginx、MySQL 不从零重讲；改为“知识回顾 + 命令默写 + 状态验证 + 故障演练 + 小产物”。
+- Git/GitHub 提前到中前期，用来保存每个阶段的脚本、配置、故障报告和 README，形成可展示证据。
+- Docker 放在本地服务基础和 Git 之后，先用 Docker Compose 串起 Nginx、后端、MySQL、Redis，再迁移到云服务器。
+- Kubernetes、Kafka、ELK、Terraform、微服务、高可用集群和复杂云原生内容暂不作为主线，避免超过实习阶段的学习承载能力。
+- 推荐总周期为 16～20 周，每周约 8～10 小时；可压缩到 12 周，但必须减少扩展内容，不能跳过复习、故障演练和综合项目。
+
+### 新路线阶段目标
+
+```text
+阶段 0（2 周）：复习体检
+Linux/网络 -> Shell/crontab -> Nginx/systemd -> MySQL。
+产物：基础命令清单、故障排查记录、能力缺口表。
+
+阶段 1（2～3 周）：Linux 运维强化
+进程、磁盘、权限、SSH、systemd、journalctl、firewalld、SELinux、资源检查。
+产物：Linux 巡检脚本和故障排查手册。
+
+阶段 2（1～2 周）：Git/GitHub 与自动化脚本
+分支、提交、远程仓库、README、Issue；Shell 规范化，补必要 Python（subprocess、requests、argparse、logging、YAML）。
+产物：ops-toolkit 运维脚本仓库。
+
+阶段 3（2 周）：服务运维深化
+Nginx 配置和日志、MySQL 连接/权限/备份/恢复/锁与慢查询基础、Redis 配置/持久化/内存和故障排查。
+产物：Nginx + MySQL + Redis 服务运行手册。
+
+阶段 4（2～3 周）：Docker/Compose
+镜像、容器、网络、卷、日志、健康检查、重启策略和 Compose 多服务编排。
+产物：可一键启动的 Web 服务栈。
+
+阶段 5（1～2 周）：Ansible
+inventory、playbook、变量、模板、handlers、幂等性和多机部署思路。
+产物：一键部署 Nginx/后端/基础配置的 playbook。
+
+阶段 6（2 周）：监控、日志和告警
+先掌握指标/日志/告警概念，再用 node_exporter、Prometheus、Grafana 做主机和服务监控，结合故障演练。
+产物：监控面板、告警规则和一次故障复盘。
+
+阶段 7（2 周）：云服务器实战
+公网/私网 IP、安全组、SSH 密钥、最小权限、域名 DNS、Nginx HTTPS、备份和恢复。
+产物：公网可访问但已做基本加固的部署记录。
+
+阶段 8（1～2 周）：基础 CI/CD
+GitHub Actions 或同类流水线，实现测试、构建、镜像或发布、部署和回滚说明。
+产物：一个可解释的 CI/CD pipeline。
+
+阶段 9（2～3 周）：综合项目与求职
+把 Nginx、后端、MySQL、Redis、Docker、监控、备份和部署文档串起来，整理简历项目描述、面试题和演示脚本。
+产物：项目 README、架构图、运行手册、故障报告、简历条目和面试问答。
 ```
 
 ## 2026-07-11 Git 仓库初始化
@@ -237,3 +298,37 @@ MySQL 用户权限、最小权限、GRANT、REVOKE 验证：完成
 ```
 
 更新这些文件时，不保存完整聊天记录，不记录密码、密码哈希、密钥、令牌或无关个人信息。
+
+## 2026-09-05 Linux 运维强化基础检查
+
+- 完成进程、CPU、内存、磁盘、inode、SSH、firewalld 和 SELinux 的一轮实操复习。
+- 进程方面：使用 `ps`、`pgrep`、`pstree` 查看 PID、PPID、STAT、父子关系和线程；验证了 `mysqld_safe(1299)` 是 `mysqld(1574)` 的父进程，二者都由 `mysql` 用户运行。
+- 信号方面：用 `sleep` 实际验证 `SIGSTOP` 将状态变为 `T`，`SIGCONT` 恢复为 `S`，`SIGTERM` 结束进程；理解退出码 `143 = 128 + 15`。
+- 已理解僵尸进程和孤儿进程：僵尸是子进程结束但父进程未回收，孤儿是父进程结束但子进程仍运行并被 PID 1 接管。
+- 资源方面：`nproc` 显示 4 个逻辑 CPU；`uptime` 负载为 `0.00, 0.01, 0.05`；`vmstat` 显示 CPU 空闲、无 Swap 交换和 I/O 等待；根分区容量使用约 33%，inode 使用约 2%。
+- 磁盘方面：`du` 定位到 `/var/cache/yum` 约 1.3G，其中 `updates` 约 968M；已理解 `df` 看文件系统、`du` 看目录、`stat` 看文件元数据、`stat -f` 看所在文件系统。
+- SSH 方面：`sshd` 正常运行并监听 IPv4/IPv6 的 22 端口；生效配置为 `PermitRootLogin yes`、`PasswordAuthentication yes`、`PubkeyAuthentication yes`。密钥登录和安全加固只完成概念说明，尚未实操。
+- firewalld 方面：服务运行中，`ens33` 使用 `public` 区域；`ssh` 和 `http` 服务已放行，8080 未明确对外放行；已区分运行配置和永久配置，确认默认区域为 `public`。
+- SELinux 方面：状态为 `Enforcing`，策略为 `targeted`；Nginx 配置为 `httpd_config_t`，网站目录为 `httpd_sys_content_t`，`httpd_can_network_connect` 为 `on`，最近 AVC 查询无匹配。
+- 当前阶段状态：Linux 运维强化的基础检查完成；后续可进入阶段复盘和 Linux 巡检脚本产物。SSH 密钥加固、更多 SELinux 策略和复杂防火墙规则留作后续安全专项。
+
+## 2026-09-07 Linux 巡检脚本进度
+
+- 会话“上次说到哪里”已定位并完整回顾。
+- 当前脚本：`/opt/scripts/system_inspection.sh`。
+- 已完成：脚本骨架、`log_message` 日志函数、6 个服务检查、2 个 HTTP 检查。
+- 正在添加：`check_memory` 和 `check_filesystem`。
+- 两个资源检查函数已写入脚本并加入主流程。
+- 2026-09-07 实际巡检结果：6 个服务全部 active，Nginx 和后端 HTTP 均为 200，内存 available 为 44%，根分区使用率 33%，inode 使用率 2%。
+- 脚本已输出 `inspection finished: warned=0 failed=0`，`echo $?` 返回 `0`。
+- Linux 巡检脚本首版已完成。
+- 阶段总结笔记已保存到 `学习总结/ops_linux_inspection_script.md`。
+
+## 2026-09-08 HTTP 状态码复习
+
+- 完成 `1xx` 到 `5xx` 常见 HTTP 状态码复习。
+- 已正确区分：`401` 是未认证，`403` 是已识别但无权限；`400` 是请求格式或参数错误，`404` 是资源不存在。
+- 已正确区分：`500` 是服务器内部程序错误，`503` 是服务暂时不可用；`502` 是代理无法取得有效后端响应，`504` 是等待后端超时。
+- 已理解 `301` 永久重定向、`302` 临时重定向、`304` 使用缓存、`429` 请求过于频繁。
+- 综合题 `403/404/502/504` 对应关系回答为 `B-C-D-A`，全部正确。
+- 当前状态：常见 HTTP 状态码基础复习完成，下一步可继续 Git/GitHub 与运维脚本版本管理。

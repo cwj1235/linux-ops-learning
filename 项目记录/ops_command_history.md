@@ -1207,3 +1207,71 @@ git add --renormalize . 按照换行规则重新规范暂存区文件。
 提交后 `git status` 显示 `nothing to commit, working tree clean`。
 ```
 
+## 2026-09-05 Linux 运维强化基础检查
+
+- 进程与信号：实际使用 `pgrep -a mysqld`、`ps -p 1299,1574 -o pid,ppid,user,stat,cmd`、`ps --forest`、`pstree -p 1`，确认 `mysqld_safe(1299) -> mysqld(1574)` 的父子关系；用 `sleep 300 &`、`kill -STOP`、`kill -CONT`、`kill -TERM` 和 `wait` 验证 `T -> S -> 结束`，退出码为 `143 = 128 + SIGTERM(15)`。
+- 资源检查：`nproc` 为 4；`uptime` 负载为 `0.00, 0.01, 0.05`；`vmstat 1 5` 显示 `id=100%`、`si/so=0`、`wa=0`；根分区容量使用约 33%，inode 使用约 2%。
+- 磁盘定位：`du` 显示 `/usr` 约 3.9G、`/var` 约 1.4G；`/var/cache/yum` 约 1.3G，其中 `updates` 约 968M；未执行 `yum clean all`。
+- 文件元数据：`stat /etc/nginx/nginx.conf` 验证大小 2461 字节、权限 0644、root:root、inode 17757760、SELinux 类型 `httpd_config_t`；`stat -f` 验证根文件系统为 XFS、块大小 4096。
+- SSH 与防火墙：`sshd` 为 active/enabled，监听 `0.0.0.0:22` 和 `[::]:22`；生效配置允许 root 密码登录、密码认证和公钥认证。firewalld 运行中，`ens33` 使用 `public`，`ssh` 和 `http` 已放行。
+- SELinux：状态为 `Enforcing`、策略为 `targeted`；网站目录类型为 `httpd_sys_content_t`，`httpd_can_network_connect` 为 `on`；`ausearch -m AVC -ts recent` 返回 `<no matches>`。
+- 阶段结论：Linux 运维强化基础检查完成。SSH 密钥加固、复杂 firewalld 规则和深度 SELinux 策略尚未实操，后续再作为安全专项处理。
+
+## 2026-09-07 Linux 巡检脚本首版验证
+
+执行过：
+
+```bash
+sudo bash /opt/scripts/system_inspection.sh
+echo $?
+```
+
+看到过：
+
+```text
+[INFO] inspection started
+[OK] service nginx is active
+[OK] service mariadb is active
+[OK] service backend-demo is active
+[OK] service crond is active
+[OK] service firewalld is active
+[OK] service sshd is active
+[OK] http nginx status=200
+[OK] http backend status=200
+[OK] memory available=44%
+[OK] root filesystem usage=33%
+[OK] root filesystem inode_usage=2%
+[INFO] inspection finished: warned=0 failed=0
+echo $? = 0
+```
+
+结论：
+
+```text
+Linux 巡检脚本首版已跑通。
+服务、HTTP、内存、根分区容量和 inode 检查均正常。
+退出码 0 表示本次巡检没有 WARN 和 FAIL。
+```
+
+## 2026-09-08 HTTP 状态码复习问答
+
+复习范围：
+
+```text
+1xx 信息响应
+2xx 成功响应
+3xx 重定向和缓存
+4xx 客户端错误
+5xx 服务器错误
+```
+
+答题结果：
+
+```text
+401：未认证；403：已识别但没有权限。
+400：请求格式或参数错误；404：资源不存在。
+500：服务器内部程序错误；503：服务暂时不可用。
+502：代理无法取得有效后端响应；504：等待后端响应超时。
+301：永久重定向；302：临时重定向；304：使用缓存；429：请求过于频繁。
+综合题 403/404/502/504 -> B-C-D-A，全部正确。
+```
