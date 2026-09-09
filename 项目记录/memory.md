@@ -357,3 +357,10 @@ GitHub Actions 或同类流水线，实现测试、构建、镜像或发布、�
 - 已执行 `git push -u origin main`，本地 `main` 成功推送到远程 `origin/main`。
 - `git branch -vv` 已显示 `[origin/main]`，说明本地分支已建立上游关联。
 - 下一步：学习 `git pull`、远程更新同步和克隆仓库。
+
+## 2026-09-09 Git clone 验证
+
+- 直接执行 `git clone` 时曾因连接 GitHub 的 HTTPS 请求被重置而失败。
+- Windows PowerShell 当前会话设置 `HTTP_PROXY` 和 `HTTPS_PROXY` 为 `http://127.0.0.1:7890` 后，`git clone --depth 1` 成功。
+- 克隆目录为 `..\linux-ops-learning-clone-2`，其 `git status` 干净，并已配置正确的 `origin` 远程地址。
+- 已理解 `Test-NetConnection` 的 TCP 连通不等于 Git HTTPS 请求一定成功，代理可以解决应用层连接问题。

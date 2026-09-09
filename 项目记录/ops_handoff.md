@@ -1138,3 +1138,10 @@ Linux 运维强化基础检查已经完成。下一步可先做一次阶段复�
 - 当前 `git branch -vv` 显示 `main a2071cd [origin/main]`，本地 `main` 与远程分支已关联。
 - 下一步学习远程更新同步、`git pull` 和 `git clone`。
 
+## 2026-09-09 Git clone 验证
+
+- 直接 clone GitHub 时 HTTPS 连接被重置。
+- 在当前 PowerShell 会话设置 `HTTP_PROXY`、`HTTPS_PROXY` 为 `http://127.0.0.1:7890` 后，`git clone --depth 1` 成功。
+- 克隆目录 `..\linux-ops-learning-clone-2` 状态干净，`origin` 地址正确。
+- 远程仓库、push、pull、clone 基础流程已验证；下一步可学习远程分支更新和实际协作流程。
+

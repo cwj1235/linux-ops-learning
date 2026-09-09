@@ -1358,3 +1358,24 @@ git branch -vv
 推送结果：main -> origin/main。
 跟踪状态：main a2071cd [origin/main]。
 ```
+
+## 2026-09-09 Git clone 与代理验证
+
+执行并验证：
+
+```powershell
+Test-NetConnection github.com -Port 443
+$env:HTTP_PROXY = "http://127.0.0.1:7890"
+$env:HTTPS_PROXY = "http://127.0.0.1:7890"
+git clone --depth 1 https://github.com/cwj1235/linux-ops-learning.git ..\linux-ops-learning-clone-2
+git -C ..\linux-ops-learning-clone-2 status
+git -C ..\linux-ops-learning-clone-2 remote -v
+```
+
+关键结果：
+
+```text
+设置本地代理后 clone 成功。
+克隆目录状态为 clean。
+origin fetch/push 地址均为 linux-ops-learning 仓库。
+```

@@ -105,3 +105,15 @@ git branch -vv
 ```
 
 结果：本地 `main` 已推送到 `origin/main`，并建立上游分支关联。以后在本地有新提交时可以直接执行 `git push`。
+
+## 7. 克隆与网络代理
+
+`git clone` 第一次复制远程仓库到本地。若 TCP 端口可达，但 Git HTTPS 请求仍被重置，可能需要配置本地代理：
+
+```powershell
+$env:HTTP_PROXY = "http://127.0.0.1:7890"
+$env:HTTPS_PROXY = "http://127.0.0.1:7890"
+git clone --depth 1 https://github.com/cwj1235/linux-ops-learning.git ..\linux-ops-learning-clone-2
+```
+
+本次设置代理后克隆成功。`$env:` 设置只作用于当前 PowerShell 会话，关闭终端后通常不会自动保留。
