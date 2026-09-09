@@ -386,3 +386,11 @@ GitHub Actions 或同类流水线，实现测试、构建、镜像或发布、�
 - 实际执行临时日志验证：`git status --short` 不显示 `git-ignore-demo.log`，`git check-ignore -v` 显示 `.gitignore` 第 16 行的 `*.log` 规则，随后删除测试文件并恢复 clean。
 - 已讲解 `git rm --cached`：取消 Git 跟踪但保留本地文件，适用于文件已被跟踪后才加入 `.gitignore` 的情况。
 - `git rm --cached` 本次只完成讲解，尚未实际执行；已明确区分 `git rm` 与 `git rm --cached`。
+
+## 2026-09-09 运维脚本修改与部署验证
+
+- 在仓库脚本中将开始日志改为 `inspection started: script=system_inspection`。
+- 使用 `git diff --check` 检查空白问题，结果无输出；提交 `d6eb2be 标记巡检脚本开始日志` 并推送到 `origin/main`。
+- 通过 `scp` 复制到 CentOS `/home/atguigu/system_inspection.sh`，使用 `bash -n` 检查语法，结果无输出。
+- 部署到 `/opt/scripts/system_inspection.sh` 后执行成功：6 个服务 active，两个 HTTP 均为 200，内存 available 42%，根分区 33%，inode 2%，warned=0，failed=0。
+- 使用 `grep` 验证新开始日志已写入 `/var/log/system_inspection.log`。

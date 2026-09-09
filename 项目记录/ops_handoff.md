@@ -1166,3 +1166,11 @@ Linux 运维强化基础检查已经完成。下一步可先做一次阶段复�
 - 已讲解 `git rm --cached` 的作用：取消 Git 跟踪但保留本地文件；本次尚未实际执行。
 - Git 记录需区分实际执行命令和概念讲解；下一步继续脚本修改和部署同步。
 
+## 2026-09-09 运维脚本修改与部署验证
+
+- 修改仓库中的开始日志，提交 `d6eb2be` 并成功推送。
+- 通过 `scp` 传到 CentOS，`bash -n` 检查通过，再复制到 `/opt/scripts/system_inspection.sh`。
+- 实际巡检结果正常：6 个服务 active、两个 HTTP 为 200、内存 42%、根分区 33%、inode 2%，warned=0、failed=0。
+- `grep` 已确认新开始日志写入 `/var/log/system_inspection.log`。
+- 本次完成 Git 修改到 CentOS 部署和日志验证的闭环；下一步继续脚本版本管理或进入下一 Git 小节。
+

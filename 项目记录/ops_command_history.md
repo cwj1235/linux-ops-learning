@@ -1454,3 +1454,25 @@ git rm --cached 文件名
 ```
 
 结论：保留本地文件，只取消 Git 跟踪；适用于已被跟踪后才加入 `.gitignore` 的文件。`git rm` 则会删除本地文件并取消跟踪。
+
+## 2026-09-09 运维脚本修改与部署验证
+
+实际执行步骤：
+
+```text
+Select-String 定位 inspection started/finished。
+用 notepad 修改开始日志。
+git diff 查看修改，git diff --check 检查空白，git add 后用 git diff --cached 复核。
+提交 d6eb2be 并 git push。
+scp 复制到 /home/atguigu/system_inspection.sh。
+bash -n 检查语法，sudo cp 部署到 /opt/scripts，sudo bash 执行巡检。
+sudo tail 查看末尾日志，sudo grep 验证新的开始日志。
+```
+
+关键结果：
+
+```text
+bash -n 无输出，语法检查通过。
+巡检执行正常：6 个服务 active、两个 HTTP 为 200、memory available=42%、root usage=33%、inode_usage=2%、warned=0、failed=0。
+grep 验证新开始日志已写入 system_inspection.log。
+```

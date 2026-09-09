@@ -187,3 +187,24 @@ CentOS 源文件：/opt/scripts/system_inspection.sh
 ```
 
 Git 仓库中的脚本是源代码和版本依据，CentOS 上的文件是部署副本。后续修改应先在仓库中提交，再同步到 CentOS 并执行验证。
+
+## 10. 脚本修改与部署闭环
+
+修改运维脚本后，按以下顺序处理：
+
+```text
+查看定位 -> 编辑 -> git diff -> git diff --check -> git add -> git diff --cached -> commit -> push
+-> scp 复制 -> bash -n -> 部署到正式路径 -> 执行 -> 查看日志
+```
+
+本次实际验证：
+
+```text
+仓库提交：d6eb2be 标记巡检脚本开始日志
+CentOS 正式文件：/opt/scripts/system_inspection.sh
+语法检查：bash -n 无输出
+执行结果：6 个服务正常，HTTP 200，warned=0，failed=0
+日志验证：新开始日志已写入 /var/log/system_inspection.log
+```
+
+这说明 Git 中的版本已经成功部署到 CentOS，并通过实际运行和日志确认生效。
