@@ -86,3 +86,22 @@ CRLF will be replaced by LF
 ```
 
 这是 Git 根据 `.gitattributes` 统一文本换行格式的提示，不是提交失败。
+
+## 6. 远程仓库
+
+```text
+origin：远程仓库的默认别名。
+git push：把本地提交上传到远程。
+git pull：获取并合并远程更新。
+git clone：复制远程仓库到本地。
+```
+
+本次已完成：
+
+```powershell
+git remote add origin https://github.com/cwj1235/linux-ops-learning.git
+git push -u origin main
+git branch -vv
+```
+
+结果：本地 `main` 已推送到 `origin/main`，并建立上游分支关联。以后在本地有新提交时可以直接执行 `git push`。

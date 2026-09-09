@@ -1131,3 +1131,10 @@ Linux 运维强化基础检查已经完成。下一步可先做一次阶段复�
 - 已删除 `conflict-a` 和 `conflict-b`，当前分支为 `main`，工作区干净。
 - Git 分支和合并冲突基础完成；下一步进入 `.gitignore` 与远程仓库。
 
+## 2026-09-09 GitHub 远程仓库
+
+- 已创建公开 GitHub 仓库 `linux-ops-learning`。
+- 已配置 `origin` 并执行 `git push -u origin main` 成功。
+- 当前 `git branch -vv` 显示 `main a2071cd [origin/main]`，本地 `main` 与远程分支已关联。
+- 下一步学习远程更新同步、`git pull` 和 `git clone`。
+

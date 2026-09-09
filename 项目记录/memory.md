@@ -349,3 +349,11 @@ GitHub Actions 或同类流水线，实现测试、构建、镜像或发布、�
 - 使用 `git add` 标记冲突解决，提交合并结果 `28b57d6`。
 - 使用 `git switch main` 和 `git branch -D conflict-a conflict-b` 清理临时分支，当前仅保留 `main`，工作区干净。
 - Git 分支基础、Fast-forward 合并和冲突处理已完成；下一步学习 `.gitignore` 和远程仓库。
+
+## 2026-09-09 GitHub 远程仓库
+
+- 创建公开远程仓库 `linux-ops-learning`。
+- 已配置远程别名 `origin`，地址为 `https://github.com/cwj1235/linux-ops-learning.git`。
+- 已执行 `git push -u origin main`，本地 `main` 成功推送到远程 `origin/main`。
+- `git branch -vv` 已显示 `[origin/main]`，说明本地分支已建立上游关联。
+- 下一步：学习 `git pull`、远程更新同步和克隆仓库。

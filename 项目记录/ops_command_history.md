@@ -1338,3 +1338,23 @@ git status
 最终文件内容为“部署状态：维护中”。
 当前仅保留 main，工作区 clean。
 ```
+
+## 2026-09-09 GitHub 远程仓库推送
+
+执行并验证：
+
+```powershell
+git remote add origin https://github.com/cwj1235/linux-ops-learning.git
+git remote set-url origin https://github.com/cwj1235/linux-ops-learning.git
+git remote -v
+git push -u origin main
+git branch -vv
+```
+
+关键结果：
+
+```text
+远程仓库：linux-ops-learning。
+推送结果：main -> origin/main。
+跟踪状态：main a2071cd [origin/main]。
+```
