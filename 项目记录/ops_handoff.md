@@ -1145,3 +1145,11 @@ Linux 运维强化基础检查已经完成。下一步可先做一次阶段复�
 - 克隆目录 `..\linux-ops-learning-clone-2` 状态干净，`origin` 地址正确。
 - 远程仓库、push、pull、clone 基础流程已验证；下一步可学习远程分支更新和实际协作流程。
 
+## 2026-09-09 Git 远程协作同步
+
+- 第二个克隆目录修改 README 并提交，直接 push 因远程领先而被拒绝。
+- 使用 `git pull --rebase origin main` 成功整合远程提交，之后 push 到 `origin/main` 成功。
+- 主项目执行 `git pull`，结果为 `Fast-forward`，README 已出现第二个克隆目录的更新。
+- 主项目和第二个克隆目录均已验证工作区干净且与远程同步。
+- Git 远程基础和双目录协作同步完成；下一步可进入运维脚本的 Git 管理实战。
+

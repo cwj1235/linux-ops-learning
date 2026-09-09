@@ -1379,3 +1379,25 @@ git -C ..\linux-ops-learning-clone-2 remote -v
 克隆目录状态为 clean。
 origin fetch/push 地址均为 linux-ops-learning 仓库。
 ```
+
+## 2026-09-09 Git 远程协作同步
+
+第二个克隆目录先产生本地提交，随后完成远程同步：
+
+```powershell
+git -C ..\linux-ops-learning-clone-2 commit -m "从第二个克隆目录更新 README"
+git -C ..\linux-ops-learning-clone-2 push
+git -C ..\linux-ops-learning-clone-2 pull --rebase origin main
+git -C ..\linux-ops-learning-clone-2 push
+git pull
+git status
+```
+
+关键结果：
+
+```text
+第一次 push 因远程领先被拒绝，提示 fetch first。
+rebase 后生成提交 71ead6e，并成功推送。
+主项目 git pull 返回 Fast-forward，README 更新成功。
+最终主项目与 origin/main 同步，工作区 clean。
+```

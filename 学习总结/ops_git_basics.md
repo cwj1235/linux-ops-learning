@@ -117,3 +117,20 @@ git clone --depth 1 https://github.com/cwj1235/linux-ops-learning.git ..\linux-o
 ```
 
 本次设置代理后克隆成功。`$env:` 设置只作用于当前 PowerShell 会话，关闭终端后通常不会自动保留。
+
+## 8. 双目录协作同步
+
+当远程仓库已经有其他提交时，直接 push 可能被拒绝：
+
+```text
+远程领先本地 -> push 被拒绝 -> pull --rebase -> push
+```
+
+本次使用：
+
+```powershell
+git pull --rebase origin main
+git push
+```
+
+随后主项目执行 `git pull`，以 `Fast-forward` 获取第二个克隆目录推送的 README 更新。`Fast-forward` 表示当前分支可以直接向前移动，不需要创建额外合并提交。

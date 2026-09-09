@@ -364,3 +364,11 @@ GitHub Actions 或同类流水线，实现测试、构建、镜像或发布、�
 - Windows PowerShell 当前会话设置 `HTTP_PROXY` 和 `HTTPS_PROXY` 为 `http://127.0.0.1:7890` 后，`git clone --depth 1` 成功。
 - 克隆目录为 `..\linux-ops-learning-clone-2`，其 `git status` 干净，并已配置正确的 `origin` 远程地址。
 - 已理解 `Test-NetConnection` 的 TCP 连通不等于 Git HTTPS 请求一定成功，代理可以解决应用层连接问题。
+
+## 2026-09-09 Git 远程协作同步
+
+- 在第二个克隆目录修改 `README.md`，提交 `e499889`。
+- 因远程已有主项目的新提交，第一次直接 push 被拒绝，提示 `fetch first`。
+- 使用 `git pull --rebase origin main` 获取远程更新并重放本地提交，生成新提交 `71ead6e`。
+- 第二个克隆目录 push 成功后，主项目执行 `git pull`，以 `Fast-forward` 更新到 `71ead6e`。
+- 主项目最终显示与 `origin/main` 同步，工作区干净；已完成双目录协作同步演练。
