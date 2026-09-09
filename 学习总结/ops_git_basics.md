@@ -79,7 +79,42 @@ git commit
 
 本次保留了“部署状态：维护中”，生成合并提交 `28b57d6`，之后删除了临时冲突分支。
 
-## 5. 换行提示
+## 5. `.gitignore` 与换行提示
+
+### `.gitignore` 实际验证
+
+使用临时日志文件验证 `*.log` 规则：
+
+```powershell
+Set-Content -Path .\git-ignore-demo.log -Value "temporary log"
+git status --short
+git check-ignore -v .\git-ignore-demo.log
+Remove-Item .\git-ignore-demo.log
+git status
+```
+
+实际结果：
+
+```text
+git status --short 没有显示临时日志文件。
+git check-ignore -v 显示 .gitignore 第 16 行的 *.log 规则。
+删除测试文件后工作区保持 clean。
+```
+
+### 已跟踪文件的处理
+
+`.gitignore` 只对尚未被 Git 跟踪的文件生效。如果文件已经提交，后来才加入 `.gitignore`，Git 仍会继续跟踪它。
+
+```powershell
+git rm --cached 文件名
+```
+
+这条命令只取消 Git 跟踪，保留本地文件。它在本次学习中已经讲解，但尚未实际执行。
+
+```text
+git rm：删除本地文件并取消 Git 跟踪。
+git rm --cached：保留本地文件，只取消 Git 跟踪。
+```
 
 ```text
 CRLF will be replaced by LF

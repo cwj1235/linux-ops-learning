@@ -1160,3 +1160,9 @@ Linux 运维强化基础检查已经完成。下一步可先做一次阶段复�
 - `git ls-files scripts/system_inspection.sh` 和文件专属 `git log` 均验证成功。
 - 下一步学习修改脚本、查看差异、提交版本并同步到 CentOS。
 
+## 2026-09-09 Git `.gitignore` 与跟踪清理补充
+
+- 已实际验证 `*.log` 忽略规则：`git status --short` 无输出，`git check-ignore -v` 定位到 `.gitignore` 第 16 行，测试文件随后已删除。
+- 已讲解 `git rm --cached` 的作用：取消 Git 跟踪但保留本地文件；本次尚未实际执行。
+- Git 记录需区分实际执行命令和概念讲解；下一步继续脚本修改和部署同步。
+

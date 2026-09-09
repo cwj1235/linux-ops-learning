@@ -1426,3 +1426,31 @@ git log --oneline -- scripts/system_inspection.sh
 提交为 624b2f1，已推送到 origin/main。
 git ls-files 和文件专属 git log 验证成功。
 ```
+
+## 2026-09-09 `.gitignore` 验证与跟踪清理讲解
+
+实际执行：
+
+```powershell
+Set-Content -Path .\git-ignore-demo.log -Value "temporary log"
+git status --short
+git check-ignore -v .\git-ignore-demo.log
+Remove-Item .\git-ignore-demo.log
+git status
+```
+
+关键结果：
+
+```text
+临时日志未出现在 git status --short 中。
+git check-ignore -v 定位到 .gitignore 第 16 行的 *.log 规则。
+测试文件已删除，工作区 clean。
+```
+
+概念讲解但未实际执行：
+
+```powershell
+git rm --cached 文件名
+```
+
+结论：保留本地文件，只取消 Git 跟踪；适用于已被跟踪后才加入 `.gitignore` 的文件。`git rm` 则会删除本地文件并取消跟踪。

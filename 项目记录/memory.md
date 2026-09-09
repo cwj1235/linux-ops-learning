@@ -380,3 +380,9 @@ GitHub Actions 或同类流水线，实现测试、构建、镜像或发布、�
 - 提交 `624b2f1 加入 Linux 系统巡检脚本` 已成功推送到 `origin/main`。
 - 使用 `git ls-files` 和 `git log -- scripts/system_inspection.sh` 验证文件跟踪状态和提交历史。
 - 下一步：学习脚本修改后的 diff、提交和部署同步流程。
+
+## 2026-09-09 Git `.gitignore` 与跟踪清理补充
+
+- 实际执行临时日志验证：`git status --short` 不显示 `git-ignore-demo.log`，`git check-ignore -v` 显示 `.gitignore` 第 16 行的 `*.log` 规则，随后删除测试文件并恢复 clean。
+- 已讲解 `git rm --cached`：取消 Git 跟踪但保留本地文件，适用于文件已被跟踪后才加入 `.gitignore` 的情况。
+- `git rm --cached` 本次只完成讲解，尚未实际执行；已明确区分 `git rm` 与 `git rm --cached`。
