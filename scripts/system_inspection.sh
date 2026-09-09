@@ -90,7 +90,7 @@ check_filesystem(){
         fi
 }
 
-log_message INFO "inspection started"
+log_message INFO "inspection started: script=system_inspection"
 
 for service in nginx mariadb backend-demo crond firewalld sshd; do
 	check_service "$service"
