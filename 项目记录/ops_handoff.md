@@ -1153,3 +1153,10 @@ Linux 运维强化基础检查已经完成。下一步可先做一次阶段复�
 - 主项目和第二个克隆目录均已验证工作区干净且与远程同步。
 - Git 远程基础和双目录协作同步完成；下一步可进入运维脚本的 Git 管理实战。
 
+## 2026-09-09 运维脚本纳入 Git
+
+- 已通过 `scp` 将 CentOS `/opt/scripts/system_inspection.sh` 复制到仓库 `scripts/system_inspection.sh`。
+- 脚本共 122 行，已提交为 `624b2f1 加入 Linux 系统巡检脚本` 并推送到 GitHub。
+- `git ls-files scripts/system_inspection.sh` 和文件专属 `git log` 均验证成功。
+- 下一步学习修改脚本、查看差异、提交版本并同步到 CentOS。
+

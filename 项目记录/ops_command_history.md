@@ -1401,3 +1401,28 @@ rebase 后生成提交 71ead6e，并成功推送。
 主项目 git pull 返回 Fast-forward，README 更新成功。
 最终主项目与 origin/main 同步，工作区 clean。
 ```
+
+## 2026-09-09 运维脚本纳入 Git
+
+执行并验证：
+
+```powershell
+New-Item -ItemType Directory -Force .\scripts
+scp atguigu@192.168.6.100:/opt/scripts/system_inspection.sh .\scripts\system_inspection.sh
+Get-Item .\scripts\system_inspection.sh
+git status --short
+git add .\scripts\system_inspection.sh
+git diff --cached --stat
+git commit -m "加入 Linux 系统巡检脚本"
+git push
+git ls-files scripts/system_inspection.sh
+git log --oneline -- scripts/system_inspection.sh
+```
+
+关键结果：
+
+```text
+脚本复制成功，大小约 2580 字节，共 122 行。
+提交为 624b2f1，已推送到 origin/main。
+git ls-files 和文件专属 git log 验证成功。
+```

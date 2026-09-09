@@ -134,3 +134,21 @@ git push
 ```
 
 随后主项目执行 `git pull`，以 `Fast-forward` 获取第二个克隆目录推送的 README 更新。`Fast-forward` 表示当前分支可以直接向前移动，不需要创建额外合并提交。
+
+## 9. 运维脚本版本管理
+
+把 CentOS 上实际运行的脚本复制到 Git 仓库后，脚本就可以拥有版本历史：
+
+```text
+复制脚本 -> git status -> git add -> git diff --cached --stat -> git commit -> git push
+```
+
+本次脚本：
+
+```text
+CentOS 源文件：/opt/scripts/system_inspection.sh
+仓库文件：scripts/system_inspection.sh
+提交：624b2f1 加入 Linux 系统巡检脚本
+```
+
+Git 仓库中的脚本是源代码和版本依据，CentOS 上的文件是部署副本。后续修改应先在仓库中提交，再同步到 CentOS 并执行验证。

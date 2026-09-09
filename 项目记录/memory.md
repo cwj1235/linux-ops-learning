@@ -372,3 +372,11 @@ GitHub Actions 或同类流水线，实现测试、构建、镜像或发布、�
 - 使用 `git pull --rebase origin main` 获取远程更新并重放本地提交，生成新提交 `71ead6e`。
 - 第二个克隆目录 push 成功后，主项目执行 `git pull`，以 `Fast-forward` 更新到 `71ead6e`。
 - 主项目最终显示与 `origin/main` 同步，工作区干净；已完成双目录协作同步演练。
+
+## 2026-09-09 运维脚本纳入 Git
+
+- 将 CentOS `/opt/scripts/system_inspection.sh` 复制到仓库 `scripts/system_inspection.sh`。
+- 文件大小约 2580 字节，共 122 行，已被 Git 跟踪。
+- 提交 `624b2f1 加入 Linux 系统巡检脚本` 已成功推送到 `origin/main`。
+- 使用 `git ls-files` 和 `git log -- scripts/system_inspection.sh` 验证文件跟踪状态和提交历史。
+- 下一步：学习脚本修改后的 diff、提交和部署同步流程。
