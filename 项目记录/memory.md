@@ -394,3 +394,59 @@ GitHub Actions 或同类流水线，实现测试、构建、镜像或发布、�
 - 通过 `scp` 复制到 CentOS `/home/atguigu/system_inspection.sh`，使用 `bash -n` 检查语法，结果无输出。
 - 部署到 `/opt/scripts/system_inspection.sh` 后执行成功：6 个服务 active，两个 HTTP 均为 200，内存 available 42%，根分区 33%，inode 2%，warned=0，failed=0。
 - 使用 `grep` 验证新开始日志已写入 `/var/log/system_inspection.log`。
+
+## 2026-09-10 Python 运维脚本起步
+
+- CentOS 默认 `python` 为 Python 2.7.5，`python3` 为 Python 3.6.8；新脚本明确使用 `python3`，未修改系统默认 `python`。
+- 创建 `/home/atguigu/system_info.py`，内容为 Python 3 shebang 和一条 `print`。
+- 使用 `python` 和 `python3` 分别执行成功，退出码为 0；已理解显式指定解释器时由命令决定运行版本。
+- 使用 `chmod +x` 后直接执行脚本成功，证明 shebang `#!/usr/bin/env python3` 生效。
+- 下一步：学习 Python 使用 `subprocess` 执行系统命令。
+
+## 2026-09-10 Python subprocess 初次验证
+
+- 在 CentOS 使用 `python3 -c 'import subprocess; subprocess.run(["hostname"])'` 调用系统命令。
+- 实际输出为 `centos100`，说明 Python 3 可以通过 `subprocess.run` 执行 Linux 命令。
+- 下一步：学习捕获命令输出并读取退出码。
+
+## 2026-09-10 Python subprocess 输出对象
+
+- 使用 `stdout=subprocess.PIPE` 捕获 `hostname` 输出，得到 `output: centos100` 和 `returncode: 0`。
+- 已理解 `result.stdout` 是命令输出，`strip()` 去除末尾换行，`result.returncode` 是退出码。
+- 直接打印 `result` 会显示 `CompletedProcess` 对象，其中包含 `args`、`returncode` 和 `stdout`。
+- 新增 Python 学习笔记：`学习总结/ops_python_basics.md`。
+- 下一步：执行一个成功命令和一个失败命令，观察 Python 如何读取不同退出码。
+
+## 2026-09-10 Python `subprocess.PIPE` 讲解
+
+- 已解释 `stdout=subprocess.PIPE`：为子进程标准输出创建管道，使 Python 可以通过 `result.stdout` 读取和处理输出。
+- 已区分未设置 `stdout` 时输出通常直接显示在终端，以及 `stderr=subprocess.PIPE` 用于捕获错误输出。
+- 已说明 Python 的 `PIPE` 不等同于 Shell 的 `|`；本次只完成概念讲解，未单独执行新的 PIPE 实验。
+
+## 2026-09-10 Python 文本输出与退出码
+
+- 已讲解 `universal_newlines=True`：将捕获输出作为 `str`，未设置时通常得到 `bytes`；当前 Python 3.6.8 使用该写法而不是较新的 `text=True`。
+- 实际执行 `false` 和 `true`：分别得到 `returncode: 1` 与 `returncode: 0`。
+- 已建立 Python `result.returncode` 与 Shell `$?` 的对应关系。
+- 下一步：把 `subprocess` 调用写入 `/home/atguigu/system_info.py`，形成可重复运行的脚本。
+
+## 2026-09-10 Python system_info 脚本验证
+
+- 已将 `subprocess.run(["hostname"])` 写入 `/home/atguigu/system_info.py`。
+- 脚本直接执行成功，实际输出 `hostname: centos100` 和 `returncode: 0`。
+- 说明 shebang、执行权限、标准输出捕获和退出码读取均正常。
+- 下一步：解释脚本结构，再增加一项系统信息检查。
+
+## 2026-09-10 Python uptime 检查
+
+- 在 `system_info.py` 中增加 `subprocess.run(["uptime"])`。
+- 实际输出显示系统已运行 3 小时 18 分、2 个登录用户，负载为 `0.01, 0.04, 0.05`。
+- `uptime_returncode: 0`，说明命令执行成功。
+- 下一步：解释 uptime 字段，并整理重复的 subprocess 代码。
+
+## 2026-09-10 Python subprocess 函数复用
+
+- 已将 `system_info.py` 中重复的 `subprocess.run` 调用整理为 `run_command()` 函数。
+- `python3 -m py_compile /home/atguigu/system_info.py` 无输出，语法检查通过。
+- 直接执行脚本成功：`hostname: centos100`、`hostname_returncode: 0`、`uptime` 正常输出、`uptime_returncode: 0`，脚本退出码为 `0`。
+- 下一步：学习 `stderr=subprocess.PIPE`，捕获并处理失败命令的错误输出。

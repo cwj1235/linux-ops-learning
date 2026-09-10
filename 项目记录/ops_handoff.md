@@ -1174,3 +1174,54 @@ Linux 运维强化基础检查已经完成。下一步可先做一次阶段复�
 - `grep` 已确认新开始日志写入 `/var/log/system_inspection.log`。
 - 本次完成 Git 修改到 CentOS 部署和日志验证的闭环；下一步继续脚本版本管理或进入下一 Git 小节。
 
+## 2026-09-10 Python 运维脚本起步
+
+- 已确认 CentOS 上 `python` 是 2.7.5，`python3` 是 3.6.8。
+- 创建 `/home/atguigu/system_info.py`，使用 `#!/usr/bin/env python3` 和 `print`。
+- 显式使用 `python3` 执行成功；增加执行权限后直接执行也成功，shebang 生效，退出码为 0。
+- 之前用 `python` 执行也成功，但只是因为这段简单代码同时兼容 Python 2 和 Python 3。
+- 下一步讲解 Python `subprocess` 和系统命令调用。
+
+## 2026-09-10 Python subprocess 初次验证
+
+- 已执行 `python3 -c 'import subprocess; subprocess.run(["hostname"])'`。
+- 实际输出 `centos100`，验证 Python 3 能通过 `subprocess.run` 执行系统命令。
+- 下一步学习读取命令输出和退出码。
+
+## 2026-09-10 Python subprocess 输出对象
+
+- 已用 `stdout=subprocess.PIPE` 获取 `hostname` 输出，实际为 `centos100`，退出码为 `0`。
+- 已区分 `result.stdout`、`result.returncode` 和直接打印 `CompletedProcess` 对象的效果。
+- Python 笔记已新增到 `学习总结/ops_python_basics.md`。
+- 下一步观察成功命令和失败命令的退出码。
+
+## 2026-09-10 Python `subprocess.PIPE` 讲解
+
+- 已讲解 `stdout=subprocess.PIPE`：让 Python 通过 `result.stdout` 获取子进程输出。
+- 已区分 `stdout`、`stderr` 和 Shell 管道符 `|`；本次没有单独执行新的 PIPE 实验。
+- 下一步继续成功/失败命令退出码实验。
+
+## 2026-09-10 Python 文本输出与退出码
+
+- 已讲解 `universal_newlines=True` 将捕获结果作为字符串处理；当前 Python 3.6.8 使用该写法。
+- 实际验证 `false` 返回 1、`true` 返回 0，并与 Shell `$?` 对应。
+- 下一步把 `subprocess` 写入 `system_info.py`。
+
+## 2026-09-10 Python system_info 脚本验证
+
+- `/home/atguigu/system_info.py` 已写入 `subprocess.run(["hostname"])`。
+- 直接执行得到 `hostname: centos100`、`returncode: 0`。
+- 下一步先解释代码结构，再添加新的系统信息检查。
+
+## 2026-09-10 Python uptime 检查
+
+- `system_info.py` 已增加 uptime 调用。
+- 实际输出：运行 3 小时 18 分、2 users、load average `0.01, 0.04, 0.05`，退出码 0。
+- 下一步解释输出字段并学习用函数减少重复代码。
+
+## 2026-09-10 Python subprocess 函数复用
+
+- `system_info.py` 已用 `run_command()` 统一封装命令执行、标准输出读取和退出码输出。
+- 语法检查通过，脚本直接执行成功，`hostname` 和 `uptime` 的退出码均为 `0`。
+- 下一步学习 `stderr=subprocess.PIPE`，处理失败命令的错误输出。
+

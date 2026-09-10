@@ -1476,3 +1476,158 @@ bash -n 无输出，语法检查通过。
 巡检执行正常：6 个服务 active、两个 HTTP 为 200、memory available=42%、root usage=33%、inode_usage=2%、warned=0、failed=0。
 grep 验证新开始日志已写入 system_inspection.log。
 ```
+
+## 2026-09-10 Python 运维脚本起步
+
+CentOS 上执行并验证：
+
+```bash
+python --version
+python3 --version
+python3 -c 'print("hello from python3")'
+vim /home/atguigu/system_info.py
+cat /home/atguigu/system_info.py
+python /home/atguigu/system_info.py
+echo $?
+python3 /home/atguigu/system_info.py
+chmod +x /home/atguigu/system_info.py
+ls -lh /home/atguigu/system_info.py
+/home/atguigu/system_info.py
+echo $?
+```
+
+关键结果：
+
+```text
+python = Python 2.7.5。
+python3 = Python 3.6.8。
+脚本通过 python、python3 和直接执行均成功，退出码为 0。
+直接执行依靠 #!/usr/bin/env python3 选择 Python 3。
+```
+
+## 2026-09-10 Python subprocess 初次验证
+
+执行：
+
+```bash
+python3 -c 'import subprocess; subprocess.run(["hostname"])'
+```
+
+结果：
+
+```text
+centos100
+```
+
+结论：`subprocess.run` 成功执行 `hostname`，命令输出直接显示在终端。
+
+## 2026-09-10 Python subprocess 输出捕获
+
+执行并验证：
+
+```bash
+python3 -c 'import subprocess; result=subprocess.run(["hostname"], stdout=subprocess.PIPE, universal_newlines=True); print("output:", result.stdout.strip()); print("returncode:", result.returncode)'
+python3 -c 'import subprocess; result=subprocess.run(["hostname"], stdout=subprocess.PIPE, universal_newlines=True); print("output:", result); print("returncode:", result.returncode)'
+```
+
+关键结果：
+
+```text
+output: centos100
+returncode: 0
+CompletedProcess(args=['hostname'], returncode=0, stdout='centos100\n')
+```
+
+结论：读取 `result.stdout` 可获得命令输出；读取 `result.returncode` 可获得退出码；直接打印 `result` 会显示完整的 `CompletedProcess` 对象。
+
+## 2026-09-10 Python `subprocess.PIPE` 讲解
+
+本次只进行概念讲解，未单独执行新的实验：
+
+```text
+stdout=subprocess.PIPE：为标准输出创建管道，Python 可通过 result.stdout 读取输出。
+stderr=subprocess.PIPE：为标准错误创建管道，Python 可通过 result.stderr 读取错误。
+未设置 PIPE：输出通常直接显示到终端。
+PIPE 与 Shell 的 | 不是同一个概念。
+```
+
+## 2026-09-10 Python 文本输出与退出码
+
+概念讲解：
+
+```text
+universal_newlines=True：将 subprocess 捕获的输出作为 str，而不是 bytes。
+当前 Python 3.6.8 使用该参数；较新 Python 可使用 text=True。
+```
+
+实际执行：
+
+```bash
+python3 -c 'import subprocess; result=subprocess.run(["false"]); print("returncode:", result.returncode)'
+python3 -c 'import subprocess; result=subprocess.run(["true"]); print("returncode:", result.returncode)'
+```
+
+实际结果：
+
+```text
+false -> returncode: 1
+true  -> returncode: 0
+```
+
+## 2026-09-10 Python system_info 脚本执行
+
+实际执行：
+
+```bash
+/home/atguigu/system_info.py
+```
+
+实际结果：
+
+```text
+hostname: centos100
+returncode: 0
+```
+
+结论：脚本通过 shebang 使用 Python 3，成功捕获 `hostname` 输出并读取退出码。
+
+## 2026-09-10 Python uptime 检查
+
+执行：
+
+```bash
+/home/atguigu/system_info.py
+```
+
+结果：
+
+```text
+hostname: centos100
+returncode: 0
+uptime: 13:34:04 up 3:18, 2 users, load average: 0.01, 0.04, 0.05
+uptime_returncode: 0
+```
+
+结论：Python 成功调用 `uptime`，获取运行时间、登录用户数和 1/5/15 分钟平均负载。
+
+## 2026-09-10 Python subprocess 函数复用验证
+
+执行：
+
+```bash
+python3 -m py_compile /home/atguigu/system_info.py
+/home/atguigu/system_info.py
+echo $?
+```
+
+结果：
+
+```text
+hostname: centos100
+hostname_returncode: 0
+uptime: 17:22:15 up 7:07, 2 users, load average: 0.00, 0.01, 0.05
+uptime_returncode: 0
+0
+```
+
+结论：`run_command()` 成功复用命令执行逻辑；语法检查、标准输出读取和退出码输出均正常。
