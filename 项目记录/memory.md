@@ -450,3 +450,225 @@ GitHub Actions 或同类流水线，实现测试、构建、镜像或发布、�
 - `python3 -m py_compile /home/atguigu/system_info.py` 无输出，语法检查通过。
 - 直接执行脚本成功：`hostname: centos100`、`hostname_returncode: 0`、`uptime` 正常输出、`uptime_returncode: 0`，脚本退出码为 `0`。
 - 下一步：学习 `stderr=subprocess.PIPE`，捕获并处理失败命令的错误输出。
+
+## 2026-09-10 Python stderr 捕获验证
+
+- 使用 `ls /not-exist` 验证 `stdout=subprocess.PIPE`、`stderr=subprocess.PIPE` 和 `universal_newlines=True`。
+- 实际结果：`stdout` 为空字符串，`stderr` 为 `'ls: 无法访问/not-exist: 没有那个文件或目录\n'`，`returncode` 为 `2`。
+- 已理解 `repr()` 的调试作用：能显示字符串引号、换行符和空字符串，便于判断真实内容。
+- 下一步：把 `stderr` 捕获加入 `run_command()`，失败时输出错误信息。
+
+## 2026-09-10 Python format 花括号讲解
+
+- 已解释 `"{}: {}".format(name, output)` 中 `{}` 是占位符，`format()` 按顺序把参数填入花括号。
+- 已用 `hostname: centos100` 和 `hostname_returncode: 0` 举例说明替换过程。
+
+## 2026-09-10 Python run_command 捕获 stderr
+
+- 已在 `run_command()` 中加入 `stderr=subprocess.PIPE`，并使用 `if result.stderr:` 判断是否输出错误信息。
+- `python3 -m py_compile` 通过；脚本执行后 `hostname` 和 `uptime` 均正常，未出现 `stderr`，退出码为 `0`。
+- 下一步：临时调用一个失败命令，验证 `stderr` 输出分支。
+
+## 2026-09-10 Python 失败命令脚本验证
+
+- `system_info.py` 实际执行 `ls /not-exist`，得到错误输出和 `ls_returncode: 2`。
+- 随后的 `echo $?` 为 `0`，已理解子命令退出码与 Python 脚本自身退出码是两层不同结果。
+- 当前脚本没有使用 `sys.exit()` 传递失败状态；下一步学习脚本整体退出码设计。
+
+## 2026-09-10 Python 清理临时失败测试
+
+- 删除 `run_command(["ls", "/not-exist"])` 后，`system_info.py` 恢复正常输出。
+- `hostname`、`uptime` 的子命令退出码均为 `0`，脚本后的 `echo $?` 为 `0`。
+- 下一步学习 `sys.exit()`，设计脚本整体成功或失败退出码。
+
+## 2026-09-10 Python sys.exit 成功分支验证
+
+- `system_info.py` 已加入 `sys.exit(1)` 和 `sys.exit(0)`。
+- `python3 -m py_compile` 无输出；`hostname`、`uptime` 子命令及脚本自身退出码均为 `0`。
+- 下一步临时制造一个子命令失败，验证脚本整体退出码是否为 `1`，然后恢复命令。
+
+## 2026-09-11 Python sys.exit 失败分支验证
+
+- 临时将 `uptime` 替换为 `false`，实际得到 `false_returncode: 1`。
+- 脚本最后的 `echo $?` 为 `1`，证明 `sys.exit(1)` 已将失败状态传递给 Shell。
+- 下一步恢复 `uptime` 并验证成功分支，避免测试命令残留。
+
+## 2026-09-11 Python 恢复正式命令验证
+
+- 已将 `false` 恢复为 `uptime`，并重新完成语法检查和脚本执行。
+- `hostname_returncode`、`uptime_returncode` 和脚本自身退出码均为 `0`。
+- Python subprocess 基础闭环完成：执行命令、捕获 stdout/stderr、读取 returncode、使用 `sys.exit()` 返回整体状态。
+- 下一步总结当前脚本，再学习参数化或日志记录设计。
+
+## 2026-09-11 Python sys.argv 参数实验
+
+- 已执行 `python3 -c 'import sys; print(sys.argv)' hostname uptime`。
+- 实际输出 `['-c', 'hostname', 'uptime']`，已理解 `sys.argv` 是命令行参数列表，用户参数从索引 `1` 开始。
+- 下一步在 `.py` 文件中观察 `sys.argv[0]`，再把参数用于脚本逻辑。
+
+## 2026-09-11 Python 文件参数验证
+
+- 已创建并运行 `/home/atguigu/args_demo.py hostname uptime`。
+- 实际确认 `sys.argv[0]` 是脚本路径，`sys.argv[1:]` 为 `['hostname', 'uptime']`。
+- 下一步学习使用 `for` 循环逐个处理参数。
+
+## 2026-09-11 Python for 循环参数验证
+
+- `args_demo.py` 已通过 `for argument in sys.argv[1:]` 逐个输出命令行参数。
+- 实际输入 `hostname uptime`，成功分别输出两个参数。
+- 下一步将循环参数交给 `subprocess.run()` 执行。
+
+## 2026-09-11 Python 参数执行命令验证
+
+- `args_demo.py` 已使用 `[argument]` 将命令行参数交给 `subprocess.run()`。
+- 实际执行 `hostname uptime`，两个命令均返回 `0`。
+- 输出中标签与值之间少一个空格，仅是格式问题。
+- 下一步传入 `false`，验证参数化脚本的失败命令结果。
+
+## 2026-09-11 Python 参数失败命令验证
+
+- `args_demo.py false` 实际得到 `false returncode:1`，证明参数化脚本取得了失败子命令的退出码。
+- 用户在 `python3` 和 `echo $?` 之间执行了 `vim`，因此显示的 `0` 是 `vim` 的退出码。
+- 下一步连续执行 Python 脚本与 `echo $?`，验证脚本自身退出码。
+
+## 2026-09-11 Python 参数脚本整体退出码验证
+
+- 连续执行 `args_demo.py false` 和 `echo $?`，实际得到子命令退出码 `1`、脚本退出码 `0`。
+- 已理解参数脚本当前只打印结果，没有使用 `sys.exit()` 传递失败。
+- 下一步增加失败标记和整体退出码逻辑。
+
+## 2026-09-11 Python 参数脚本失败状态传递
+
+- `args_demo.py` 已通过 `has_failure` 汇总命令结果，并使用 `sys.exit(1)` 返回失败。
+- 实际执行 `false` 后，子命令退出码和脚本自身退出码均为 `1`。
+- 下一步验证多个命令中部分失败时的执行和最终状态。
+
+## 2026-09-11 Python 多命令结果汇总验证
+
+- `args_demo.py false uptime` 实际执行时，`false` 返回 `1`，`uptime` 仍继续执行并返回 `0`。
+- 最终脚本退出码为 `1`，证明任意命令失败都会使整体状态失败，同时不会中断后续检查。
+- 下一步验证全部命令成功时整体退出码为 `0`。
+
+## 2026-09-11 Python 全部成功参数验证
+
+- 执行 `args_demo.py hostname uptime`，`hostname` 和 `uptime` 子命令均返回 `0`，输出正常。
+- 本次尚未执行紧接的 `echo $?`，脚本自身退出码待确认。
+- 下一步直接执行 `echo $?`，确认整体成功状态。
+
+## 2026-09-11 Python 参数化脚本三种状态完成
+
+- 补充执行 `echo $?` 得到 `0`，确认全部命令成功时脚本整体返回 `0`。
+- 已验证全部成功、任意失败、部分失败后继续执行三种状态。
+- `args_demo.py` 的基础参数化和退出码汇总逻辑完成。
+- 下一步学习 `argparse`，增加规范的参数说明和帮助信息。
+
+## 2026-09-11 Python argparse 代码讲解
+
+- 已讲解 `ArgumentParser`、`description`、位置参数、`nargs="+"`、`help`、`parse_args()` 和 `args.commands` 的作用。
+- 本次只完成概念和代码结构讲解，尚未实际验证新的 `argparse` 版本。
+- 下一步执行 `args_demo.py --help`，观察帮助信息。
+
+## 2026-09-11 Python argparse help 验证
+
+- 实际执行 `python3 /home/atguigu/args_demo.py --help`，自动显示 usage、`commands` 参数和 `-h/--help`。
+- 已确认 `--help` 只显示帮助并结束，不执行命令循环。
+- 下一步测试不传命令时的 `nargs="+"` 参数校验。
+
+## 2026-09-11 Python argparse 必填参数验证
+
+- 不传命令运行 `args_demo.py` 时，`argparse` 提示 `commands` 必填。
+- 实际 `echo $?` 为 `2`，已理解这是参数解析错误，不是子命令执行失败。
+- 下一步验证合法参数的 `argparse` 正常执行路径。
+
+## 2026-09-11 Python argparse 合法参数验证
+
+- 实际执行 `args_demo.py hostname uptime`，两个子命令退出码均为 `0`。
+- 脚本最后的 `echo $?` 为 `0`，合法参数路径验证成功。
+- `argparse` 基础验证完成：帮助、参数缺失错误和正常执行。
+- 下一步增加可选参数，例如详细输出开关或命令超时。
+
+## 2026-09-11 Python argparse 未知选项验证
+
+- 尝试使用未注册的 `--verbose`，`argparse` 报错 `unrecognized arguments`。
+- 已理解选项必须先使用 `add_argument()` 定义。
+- 下一步加入 `--verbose` 和 `action="store_true"`，验证可选开关。
+
+## 2026-09-12 Python argparse verbose 验证
+
+- `args_demo.py` 已加入 `--verbose` 和 `action="store_true"`。
+- 实际执行 `--verbose hostname uptime` 时，在每个命令前输出 `executing:`，两个命令均成功。
+- 已理解 verbose 只控制过程提示，不改变子命令结果。
+- 下一步验证不带 `--verbose` 的普通输出。
+
+## 2026-09-12 Python argparse 普通模式验证
+
+- 不带 `--verbose` 执行 `args_demo.py hostname uptime`，不显示 `executing:`，但两个命令均返回 `0`。
+- 脚本最后的 `echo $?` 为 `0`，普通模式验证成功。
+- verbose 与普通模式对比完成；下一步学习 `subprocess.run()` 的 `timeout` 超时控制。
+
+## 2026-09-12 Python subprocess timeout 验证
+
+- `args_demo.py` 已加入 `timeout=3` 和 `TimeoutExpired` 异常处理。
+- 实际执行 `hostname yes`，`hostname` 成功，`yes` 超时，脚本整体退出码为 `1`。
+- 超时逻辑正确；提示输出的 `{}` 与 `yes` 分离，下一步修正为 `format()` 格式化写法。
+
+## 2026-09-12 Python timeout 提示格式修正
+
+- 超时提示已改为 `"{} timeout after 3 seconds".format(argument)`，实际显示 `yes timeout after 3 seconds`。
+- 脚本仍返回 `1`，超时逻辑没有改变。
+- `^[[A` 是终端方向键控制序列；最后一次编辑后仍需重新运行 `py_compile`。
+
+## 2026-09-12 Python timeout 修改后完整验证
+
+- 修改后的 `args_demo.py` 已重新通过 `python3 -m py_compile`。
+- 实际执行 `hostname yes`：`hostname` 成功，`yes` 在 3 秒后超时，提示格式正确。
+- 脚本整体退出码为 `1`，超时处理完成验证。
+- 下一步恢复正常命令测试，并总结当前 Python 参数脚本。
+
+## 2026-09-12 Python 参数脚本阶段完成
+
+- 恢复正常命令后重新执行 `hostname uptime`，两个子命令及脚本整体退出码均为 `0`。
+- 当前脚本已验证 `argparse`、帮助和参数校验、verbose、stdout/stderr 捕获、失败汇总、timeout 和 `sys.exit()`。
+- 下一步整理 Python 阶段总结，再加入日志记录或纳入 Git。
+
+## 2026-09-12 Python logging 基础验证
+
+- 已实际执行 `logging.basicConfig()`，验证 `INFO`、`WARNING`、`ERROR` 三种级别。
+- 已理解 `level=logging.INFO` 和 `format="%(levelname)s: %(message)s"` 的作用。
+- 当前日志只显示在终端；下一步学习写入日志文件。
+
+## 2026-09-12 Python logging 文件验证
+
+- 使用 `filename="/home/atguigu/python_demo.log"` 实际写入日志。
+- `cat` 查看确认日志包含时间、级别和消息。
+- 文件日志验证完成；下一步将 logging 集成到 `args_demo.py`。
+
+## 2026-09-12 Python args_demo logging 集成验证
+
+- `args_demo.py` 已加入 logging，并记录 `command started`、`command succeeded`。
+- 实际执行 `hostname uptime`，两个命令均成功，日志文件正确写入四条过程记录。
+- 已区分终端结果输出与日志文件过程记录。
+- 下一步验证失败和超时命令的 `ERROR` 日志。
+
+## 2026-09-12 Python logging 失败与超时验证
+
+- 实际执行 `false yes`：`false` 返回 `1`，`yes` 超时，脚本整体退出码为 `1`。
+- 日志文件正确记录 `ERROR: command failed: false returncode=1` 和 `ERROR: command timeout: yes`。
+- Python logging 集成的成功、失败、超时路径均已验证。
+- 下一步总结 Python 阶段并纳入 Git。
+
+## 2026-09-12 Python 运维脚本阶段完整总结
+
+- 已完整记录 Python 3 运维脚本学习：版本和 shebang、`subprocess.run()`、`PIPE`、stdout/stderr、`universal_newlines=True`、`returncode`、函数封装、`sys.exit()`、`sys.argv`、`for`、`argparse`、`--verbose`、`timeout` 和 `logging`。
+- `system_info.py` 已完成主机名、uptime、错误输出和整体退出码验证；`args_demo.py` 已完成多命令执行、失败汇总、参数校验、详细模式、超时和日志验证。
+- 已验证退出码规则：正常为 `0`，命令失败或超时为 `1`，`argparse` 参数错误为 `2`。
+- 当前 Python 脚本和日志在 CentOS 上，`args_demo.py` 已复制到 Windows Git 仓库的 `scripts/args_demo.py`；Python 笔记及记录存在未提交修改。
+- `.log` 被 `.gitignore` 忽略，不直接纳入 Git；下一步复制 `args_demo.py` 到仓库 `scripts/`，检查后提交并推送。
+
+## 2026-09-12 Python 脚本复制到仓库
+
+- 已通过 `scp` 将 `/home/atguigu/args_demo.py` 复制为仓库文件 `scripts/args_demo.py`。
+- 实际文件大小为 1532 字节，Git 状态显示为未跟踪文件。
+- Python 学习笔记、命令履历、交接文件和记忆文件均有未提交修改。
+- 日志文件仍只保留在 CentOS，因 `*.log` 忽略规则不复制进 Git。
+- 下一步检查 `args_demo.py` 和四份记录的暂存差异，再提交推送。

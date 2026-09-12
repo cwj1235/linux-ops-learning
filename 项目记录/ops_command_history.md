@@ -1631,3 +1631,518 @@ uptime_returncode: 0
 ```
 
 结论：`run_command()` 成功复用命令执行逻辑；语法检查、标准输出读取和退出码输出均正常。
+
+## 2026-09-10 Python stderr 捕获验证
+
+执行：
+
+```bash
+python3 -c 'import subprocess; result=subprocess.run(["ls", "/not-exist"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True); print("stdout:", repr(result.stdout)); print("stderr:", repr(result.stderr)); print("returncode:", result.returncode)'
+```
+
+结果：
+
+```text
+stdout: ''
+stderr: 'ls: 无法访问/not-exist: 没有那个文件或目录\n'
+returncode: 2
+```
+
+结论：命令失败时，正常输出为空字符串，错误信息进入 `stderr`，退出码为非 0；`repr()` 便于观察字符串的真实结构。
+
+## 2026-09-10 Python run_command 正常路径验证
+
+执行：
+
+```bash
+python3 -m py_compile /home/atguigu/system_info.py
+/home/atguigu/system_info.py
+echo $?
+```
+
+结果：
+
+```text
+hostname: centos100
+hostname_returncode: 0
+uptime: 19:03:57 up 8:48, 2 users, load average: 0.00, 0.01, 0.05
+uptime_returncode: 0
+0
+```
+
+结论：加入 `stderr=subprocess.PIPE` 后，成功命令不会输出 `stderr`；脚本语法和执行均正常。
+
+## 2026-09-10 Python 失败命令脚本验证
+
+实际执行：
+
+```bash
+/home/atguigu/system_info.py
+echo $?
+```
+
+关键结果：
+
+```text
+ls_stderr: ls: 无法访问/not-exist: 没有那个文件或目录
+ls_returncode: 2
+0
+```
+
+结论：`ls_returncode: 2` 是子命令 `ls` 的失败退出码；最后的 `0` 是 Python 脚本自身退出码。当前脚本只打印子命令结果，还没有使用 `sys.exit()` 将失败状态传递给 Shell。
+
+## 2026-09-10 Python 清理临时失败测试
+
+实际删除临时的 `run_command(["ls", "/not-exist"])` 后执行：
+
+```bash
+/home/atguigu/system_info.py
+echo $?
+```
+
+结果：`hostname_returncode: 0`、`uptime_returncode: 0`，脚本退出码为 `0`。结论：脚本已恢复正常路径验证。
+
+## 2026-09-10 Python sys.exit 成功分支验证
+
+实际执行：
+
+```bash
+python3 -m py_compile /home/atguigu/system_info.py
+/home/atguigu/system_info.py
+echo $?
+```
+
+结果：语法检查无输出，`hostname_returncode: 0`、`uptime_returncode: 0`，脚本退出码为 `0`。结论：`sys.exit(0)` 成功分支已验证。
+
+## 2026-09-11 Python sys.exit 失败分支验证
+
+实际把脚本中的：
+
+```python
+uptime_result = run_command(["uptime"])
+```
+
+临时改为：
+
+```python
+uptime_result = run_command(["false"])
+```
+
+执行结果：
+
+```text
+hostname_returncode: 0
+false_returncode: 1
+echo $? -> 1
+```
+
+结论：`false` 失败后，条件判断执行 `sys.exit(1)`，Python 脚本的失败状态已成功传递给 Shell。该临时命令需要恢复为 `uptime`。
+
+## 2026-09-11 Python 恢复正式命令验证
+
+已将：
+
+```python
+uptime_result = run_command(["false"])
+```
+
+恢复为：
+
+```python
+uptime_result = run_command(["uptime"])
+```
+
+实际执行语法检查和脚本，`hostname_returncode: 0`、`uptime_returncode: 0`，最后 `echo $?` 为 `0`。结论：失败测试已清理，脚本恢复正常版本。
+
+## 2026-09-11 Python sys.argv 参数实验
+
+实际执行：
+
+```bash
+python3 -c 'import sys; print(sys.argv)' hostname uptime
+```
+
+实际输出：
+
+```text
+['-c', 'hostname', 'uptime']
+```
+
+结论：`sys.argv` 保存命令行参数；使用 `-c` 时第 0 项是 `-c`，第 1、2 项分别是 `hostname` 和 `uptime`。
+
+## 2026-09-11 Python 文件参数验证
+
+实际执行：
+
+```bash
+python3 /home/atguigu/args_demo.py hostname uptime
+```
+
+实际输出：
+
+```text
+program: /home/atguigu/args_demo.py
+argument: ['hostname', 'uptime']
+```
+
+结论：实际脚本的 `sys.argv[0]` 是脚本路径，`sys.argv[1:]` 是用户传入的全部参数。
+
+## 2026-09-11 Python for 循环参数验证
+
+修改 `/home/atguigu/args_demo.py` 后执行：
+
+```bash
+python3 /home/atguigu/args_demo.py hostname uptime
+```
+
+实际输出：
+
+```text
+program: /home/atguigu/args_demo.py
+argument: hostname
+argument: uptime
+```
+
+结论：`for` 循环成功逐个读取 `sys.argv[1:]` 中的参数。
+
+## 2026-09-11 Python 参数执行命令验证
+
+执行：
+
+```bash
+python3 /home/atguigu/args_demo.py hostname uptime
+```
+
+实际结果：
+
+```text
+hostname output:centos100
+hostname returncode:0
+uptime output:09:17:30 up 37 min, 2 users, load average: 0.01, 0.02, 0.04
+uptime returncode:0
+```
+
+结论：`sys.argv` 中的参数已通过 `[argument]` 交给 `subprocess.run()` 实际执行，两个命令均成功。`output:` 和结果之间少空格只是输出格式问题。
+
+## 2026-09-11 Python 参数失败命令验证
+
+执行：
+
+```bash
+python3 /home/atguigu/args_demo.py false
+```
+
+实际输出：
+
+```text
+false output:
+false returncode:1
+```
+
+结论：参数 `false` 被成功执行并返回 `1`。之后先执行了 `vim`，再执行 `echo $?`，所以 `0` 表示 `vim` 成功，不能作为 Python 脚本退出码。
+
+## 2026-09-11 Python 参数脚本整体退出码验证
+
+连续执行：
+
+```bash
+python3 /home/atguigu/args_demo.py false
+echo $?
+```
+
+实际结果：
+
+```text
+false output:
+false returncode: 1
+0
+```
+
+结论：`false` 子命令返回 `1`，但 `args_demo.py` 当前没有 `sys.exit()` 失败逻辑，因此脚本自身仍返回 `0`。
+
+## 2026-09-11 Python 参数脚本失败状态传递
+
+实际执行：
+
+```bash
+python3 -m py_compile /home/atguigu/args_demo.py
+python3 /home/atguigu/args_demo.py false
+echo $?
+```
+
+实际结果：语法检查无输出，`false returncode: 1`，脚本整体退出码为 `1`。结论：`has_failure` 与 `sys.exit(1)` 已成功将失败状态传给 Shell。
+
+## 2026-09-11 Python 多命令结果汇总验证
+
+实际执行：
+
+```bash
+python3 /home/atguigu/args_demo.py false uptime
+echo $?
+```
+
+实际结果：`false returncode: 1`，随后 `uptime returncode: 0`，最终脚本退出码为 `1`。结论：循环会继续执行后续命令，但任意一次失败都会使整体状态保持失败。
+
+## 2026-09-11 Python 全部成功参数验证
+
+实际执行：
+
+```bash
+python3 /home/atguigu/args_demo.py hostname uptime
+```
+
+实际结果：`hostname returncode: 0`、`uptime returncode: 0`，两个命令输出正常。本次尚未执行紧接的 `echo $?`，因此脚本整体成功退出码待补充验证。
+
+补充执行：
+
+```bash
+echo $?
+```
+
+结果为 `0`。结论：全部命令成功时，`args_demo.py` 整体退出码也为 `0`。
+
+## 2026-09-11 Python argparse help 验证
+
+实际执行：
+
+```bash
+python3 /home/atguigu/args_demo.py --help
+```
+
+关键输出：
+
+```text
+usage: args_demo.py [-h] commands [commands ...]
+positional arguments:
+  commands    要执行的命令名称
+optional arguments:
+  -h, --help  show this help message and exit
+```
+
+结论：`argparse` 已自动生成用法、参数说明和帮助选项；`--help` 只展示帮助，不执行命令循环。
+
+## 2026-09-11 Python argparse 必填参数验证
+
+实际执行：
+
+```bash
+python3 /home/atguigu/args_demo.py
+echo $?
+```
+
+实际结果：
+
+```text
+args_demo.py: error: the following arguments are required: commands
+2
+```
+
+结论：未提供位置参数时，`argparse` 在执行命令前拒绝输入，退出码为 `2`，表示参数使用错误。
+
+## 2026-09-11 Python argparse 合法参数验证
+
+实际执行：
+
+```bash
+python3 /home/atguigu/args_demo.py hostname uptime
+echo $?
+```
+
+结果：`hostname returncode: 0`、`uptime returncode: 0`，最后脚本退出码为 `0`。结论：`argparse` 合法参数路径验证成功。
+
+## 2026-09-11 Python argparse 未知选项验证
+
+实际执行：
+
+```bash
+python3 /home/atguigu/args_demo.py --verbose hostname uptime
+```
+
+实际结果：
+
+```text
+args_demo.py: error: unrecognized arguments: --verbose
+```
+
+结论：`--verbose` 尚未通过 `add_argument()` 注册，`argparse` 拒绝未知选项，命令没有进入执行循环。
+
+## 2026-09-12 Python argparse verbose 验证
+
+实际执行：
+
+```bash
+python3 -m py_compile /home/atguigu/args_demo.py
+python3 /home/atguigu/args_demo.py --verbose hostname uptime
+```
+
+关键结果：
+
+```text
+executing: hostname
+hostname returncode: 0
+executing: uptime
+uptime returncode: 0
+```
+
+结论：`--verbose` 已注册并生效，只增加命令执行前的过程提示，不改变命令执行结果。
+
+## 2026-09-12 Python argparse 普通模式验证
+
+实际执行：
+
+```bash
+python3 /home/atguigu/args_demo.py hostname uptime
+echo $?
+```
+
+实际结果：没有 `executing:` 过程提示，`hostname returncode: 0`、`uptime returncode: 0`，脚本整体退出码为 `0`。结论：不加 `--verbose` 时仍正常执行，只隐藏过程提示。
+
+## 2026-09-12 Python subprocess timeout 验证
+
+实际执行：
+
+```bash
+python3 -m py_compile /home/atguigu/args_demo.py
+python3 /home/atguigu/args_demo.py hostname yes
+echo $?
+```
+
+实际结果：`hostname returncode: 0`，`yes` 超过 3 秒后触发超时，脚本退出码为 `1`。超时提示显示为 `{} timeout after 3 seconds yes`，说明超时逻辑正确但提示字符串使用了逗号打印，后续需改为 `"{} timeout after 3 seconds".format(argument)`。
+
+补充验证：
+
+```text
+yes timeout after 3 seconds
+1
+```
+
+结论：超时提示格式已修正，脚本仍正确返回 `1`。本次修改后的 `py_compile` 需要单独重新执行；`^[[A` 是终端按键控制序列，不是脚本输出。
+
+## 2026-09-12 Python 修改后 timeout 完整验证
+
+实际执行：
+
+```bash
+python3 -m py_compile /home/atguigu/args_demo.py
+python3 /home/atguigu/args_demo.py hostname yes
+echo $?
+```
+
+结果：修改后的语法检查无输出；`hostname returncode: 0`；`yes timeout after 3 seconds`；脚本退出码为 `1`。结论：格式修正、语法检查和超时失败处理均验证成功。
+
+## 2026-09-12 Python timeout 正常路径验证
+
+实际执行：
+
+```bash
+python3 -m py_compile /home/atguigu/args_demo.py
+python3 /home/atguigu/args_demo.py hostname uptime
+echo $?
+```
+
+结果：语法检查无输出，`hostname` 和 `uptime` 均返回 `0`，脚本整体退出码为 `0`。结论：正常命令不会触发 timeout，成功路径验证完成。
+
+## 2026-09-12 Python logging 基础验证
+
+实际执行：
+
+```bash
+python3 -c 'import logging; logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s"); logging.info("inspection started"); logging.warning("memory is low"); logging.error("backend check failed")'
+```
+
+实际输出：
+
+```text
+INFO: inspection started
+WARNING: memory is low
+ERROR: backend check failed
+```
+
+结论：`logging` 级别和格式配置生效，日志当前只输出到终端。
+
+## 2026-09-12 Python logging 文件验证
+
+实际执行：
+
+```bash
+python3 -c 'import logging; logging.basicConfig(filename="/home/atguigu/python_demo.log", level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s"); logging.info("inspection started"); logging.error("backend check failed")'
+cat /home/atguigu/python_demo.log
+```
+
+实际结果：
+
+```text
+2026-09-12 11:42:42,205 INFO: inspection started
+2026-09-12 11:42:42,205 ERROR: backend check failed
+```
+
+结论：日志成功写入 `/home/atguigu/python_demo.log`，时间、级别和消息均正常记录。
+
+## 2026-09-12 Python args_demo logging 集成验证
+
+实际执行：
+
+```bash
+python3 -m py_compile /home/atguigu/args_demo.py
+python3 /home/atguigu/args_demo.py hostname uptime
+cat /home/atguigu/args_demo.log
+```
+
+终端中的两个命令均返回 `0`。日志实际记录：
+
+```text
+INFO: command started: hostname
+INFO: command succeeded: hostname
+INFO: command started: uptime
+INFO: command succeeded: uptime
+```
+
+结论：`args_demo.py` 已成功把命令开始和成功事件写入日志文件。
+
+## 2026-09-12 Python logging 失败与超时验证
+
+实际执行：
+
+```bash
+python3 /home/atguigu/args_demo.py false yes
+echo $?
+tail -n 10 /home/atguigu/args_demo.log
+```
+
+实际结果：`false returncode: 1`，`yes timeout after 3 seconds`，脚本退出码为 `1`。日志中出现：
+
+```text
+ERROR: command failed: false returncode=1
+ERROR: command timeout: yes
+```
+
+结论：失败和超时事件均已正确写入 `ERROR` 日志。
+
+## 2026-09-12 Python 运维脚本阶段总复盘
+
+本次总复盘依据前面各节已经实际执行的命令和输出整理，不新增虚构的执行结果。已完成并验证的范围：
+
+```text
+Python 2/3 环境识别与 Python 3 shebang
+subprocess.run、stdout、stderr、PIPE、universal_newlines
+CompletedProcess、returncode、strip、format 花括号
+函数封装、sys.argv、for 循环、argparse
+--help、必填参数、未知参数和合法参数
+--verbose 普通/详细模式
+失败汇总、sys.exit(0/1)、timeout=3
+logging 终端输出、文件日志、成功/失败/超时记录
+```
+
+阶段结论：`system_info.py` 和 `args_demo.py` 均已在 CentOS 实际运行；成功、失败、混合命令和超时路径均已验证。当前下一步是把脚本复制到 Windows Git 仓库，补充文档后提交并推送；日志文件因 `.gitignore` 的 `*.log` 规则不纳入版本库。
+
+## 2026-09-12 Python 脚本复制到 Git 仓库
+
+Windows PowerShell 实际执行：
+
+```powershell
+scp atguigu@192.168.6.100:/home/atguigu/args_demo.py .\scripts\args_demo.py
+Get-Item .\scripts\args_demo.py
+git status --short
+```
+
+结果：文件成功复制到 `scripts/args_demo.py`，大小为 1532 字节；Git 将其显示为未跟踪文件 `?? scripts/args_demo.py`。四份 Python 学习记录仍为已修改但未提交状态。
