@@ -3357,3 +3357,488 @@ db0:keys=3,expires=0,avg_ttl=0
 ```
 
 结论：服务、监听、配置、RDB/AOF 状态、持久化文件、内存、key 分布和错误日志巡检全部通过。
+
+## 2026-09-15 Docker 安装与容器生命周期验证
+
+### 系统检查与安装
+
+```bash
+cat /etc/os-release
+uname -r
+docker --version
+sudo yum install -y yum-utils
+sudo yum-config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
+```
+
+关键结果：
+
+```text
+CentOS Linux 7 (Core)
+3.10.0-1160.el7.x86_64
+bash: docker: 未找到命令...
+curl#35 - "TCP connection reset by peer"
+```
+
+改用阿里云仓库并安装：
+
+```bash
+sudo yum-config-manager --add-repo https://mirrors.aliyun.com/docker-ce/linux/centos/docker-ce.repo
+sudo yum makecache fast
+sudo yum install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
+sudo systemctl enable --now docker
+```
+
+关键安装版本：
+
+```text
+docker-ce 26.1.4-1.el7
+docker-ce-cli 26.1.4-1.el7
+containerd.io 1.6.33-3.1.el7
+docker-compose-plugin 2.27.1-1.el7
+```
+
+验证：
+
+```bash
+sudo docker version
+sudo docker info
+docker compose version
+```
+
+关键结果：
+
+```text
+Client: Docker Engine - Community 26.1.4
+Server: Docker Engine - Community 26.1.4
+Storage Driver: overlay2
+Backing Filesystem: xfs
+Docker Root Dir: /var/lib/docker
+Docker Compose version v2.27.1
+```
+
+### 镜像加速与 hello-world
+
+```bash
+sudo docker run --rm hello-world
+```
+
+首次失败：
+
+```text
+Get "https://registry-1.docker.io/v2/": dial tcp 104.244.43.248:443: i/o timeout
+```
+
+配置加速器：
+
+```bash
+sudo mkdir -p /etc/docker
+
+sudo tee /etc/docker/daemon.json >/dev/null <<'EOF'
+{
+  "registry-mirrors": [
+    "https://docker.m.daocloud.io"
+  ]
+}
+EOF
+
+sudo systemctl restart docker
+```
+
+重新验证：
+
+```bash
+sudo docker run --rm hello-world
+```
+
+关键结果：
+
+```text
+Hello from Docker!
+This message shows that your installation appears to be working correctly.
+```
+
+### 镜像与容器生命周期
+
+```bash
+sudo docker images
+sudo docker ps
+sudo docker ps -a
+sudo docker run -d --name practice-alpine alpine:latest sleep 300
+sudo docker ps --filter name=practice-alpine
+sudo docker inspect practice-alpine --format 'Name={{.Name}} State={{.State.Status}} Image={{.Config.Image}}'
+sudo docker exec practice-alpine cat /etc/os-release
+sudo docker stop practice-alpine
+sudo docker ps -a --filter name=practice-alpine
+sudo docker rm practice-alpine
+sudo docker ps -a --filter name=practice-alpine
+sudo docker rmi alpine:latest hello-world:latest
+sudo docker images
+```
+
+关键结果：
+
+```text
+practice-alpine State=running
+Alpine Linux v3.24
+Exited (137)
+practice-alpine
+最终 docker images 为空
+```
+
+结论：Docker 镜像拉取、容器运行、状态检查、容器内执行命令、停止、删除容器和删除镜像均验证完成。
+
+## 2026-09-15 Docker 数据卷验证
+
+### 创建并查看数据卷
+
+```bash
+sudo docker volume create practice-volume
+sudo docker volume inspect practice-volume --format '{{.Name}} {{.Mountpoint}}'
+```
+
+关键输出：
+
+```text
+practice-volume
+practice-volume /var/lib/docker/volumes/practice-volume/_data
+```
+
+### 用两个独立容器验证数据持久化
+
+第一个容器写入：
+
+```bash
+sudo docker run --rm \
+  -v practice-volume:/data \
+  alpine sh -c 'echo docker-volume-ok > /data/check.txt'
+```
+
+关键输出：
+
+```text
+Status: Downloaded newer image for alpine:latest
+```
+
+第二个新容器读取：
+
+```bash
+sudo docker run --rm \
+  -v practice-volume:/data \
+  alpine cat /data/check.txt
+```
+
+关键输出：
+
+```text
+docker-volume-ok
+```
+
+结论：第一个容器已删除，但第二个新容器仍能读出数据，证明数据保存在 `practice-volume` 中。
+
+### 清理数据卷和镜像
+
+```bash
+sudo docker volume ls --filter name=practice-volume
+sudo docker volume rm practice-volume
+sudo docker volume ls --filter name=practice-volume
+sudo docker rmi alpine:latest
+```
+
+关键输出：
+
+```text
+local     practice-volume
+practice-volume
+Untagged: alpine:latest
+Deleted: ...
+```
+
+最终 `practice-volume` 不存在，`alpine:latest` 镜像已删除。
+
+## 2026-09-15 Docker 端口映射验证
+
+### 检查端口并首次运行
+
+```bash
+sudo ss -lntp 'sport = :18080'
+sudo docker run -d \
+  --name practice-nginx \
+  -p 18080:80 \
+  nginx:alpine
+```
+
+首次运行后容器退出，检查：
+
+```bash
+sudo docker ps -a --filter name=practice-nginx
+sudo docker inspect practice-nginx \
+  --format 'Status={{.State.Status}} ExitCode={{.State.ExitCode}} Error={{.State.Error}} OOM={{.State.OOMKilled}}'
+sudo docker logs --tail 50 practice-nginx
+```
+
+关键输出：
+
+```text
+Exited (1)
+Status=exited ExitCode=1 Error= OOM=false
+pwrite() "/run/nginx.pid" failed (1: Operation not permitted)
+```
+
+结论：应用启动失败，不是端口映射失败。
+
+### 改用固定版本
+
+```bash
+sudo docker run -d \
+  --name practice-nginx \
+  -p 18080:80 \
+  nginx:1.24-alpine
+```
+
+验证：
+
+```bash
+sudo docker ps --filter name=practice-nginx
+sudo docker logs --tail 20 practice-nginx
+sudo docker port practice-nginx
+curl -I http://127.0.0.1:18080
+```
+
+关键输出：
+
+```text
+nginx:1.24-alpine   Up   0.0.0.0:18080->80/tcp, :::18080->80/tcp
+nginx/1.24.0
+start worker processes
+80/tcp -> 0.0.0.0:18080
+80/tcp -> [::]:18080
+HTTP/1.1 200 OK
+Server: nginx/1.24.0
+```
+
+### 清理
+
+```bash
+sudo docker stop practice-nginx
+sudo docker rm practice-nginx
+sudo docker rmi nginx:1.24-alpine
+```
+
+关键输出：
+
+```text
+practice-nginx
+practice-nginx
+Untagged: nginx:1.24-alpine
+Deleted: ...
+```
+
+结论：宿主机 `18080` 到容器 `80` 的端口映射验证完成，练习容器和镜像已清理。
+
+## 2026-09-15 Dockerfile 自定义镜像验证
+
+### 创建文件
+
+```bash
+mkdir -p ~/dockerfile-practice
+cd ~/dockerfile-practice
+```
+
+`index.html` 内容：
+
+```html
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Dockerfile Practice</title>
+</head>
+<body>
+  <h1>Dockerfile build success</h1>
+</body>
+</html>
+```
+
+`Dockerfile` 内容：
+
+```dockerfile
+FROM nginx:1.24-alpine
+
+COPY index.html /usr/share/nginx/html/index.html
+
+EXPOSE 80
+
+CMD ["nginx", "-g", "daemon off;"]
+```
+
+### 构建镜像
+
+第一次缺少构建上下文：
+
+```bash
+sudo docker build -t practice-nginx-image:1.0
+```
+
+关键报错：
+
+```text
+ERROR: "docker buildx build" requires exactly 1 argument.
+```
+
+正确命令：
+
+```bash
+sudo docker build -t practice-nginx-image:1.0 .
+```
+
+### 运行并验证
+
+```bash
+sudo ss -lntp 'sport = :18081'
+
+sudo docker run -d \
+  --name practice-nginx-image \
+  -p 18081:80 \
+  practice-nginx-image:1.0
+
+sudo docker ps --filter name=practice-nginx-image
+sudo docker port practice-nginx-image
+curl -I http://127.0.0.1:18081
+curl http://127.0.0.1:18081
+```
+
+关键输出：
+
+```html
+<h1>Dockerfile build success</h1>
+```
+
+结论：自定义镜像构建、运行、端口映射和页面读回全部成功。
+
+### 清理
+
+```bash
+sudo docker stop practice-nginx-image
+sudo docker rm practice-nginx-image
+sudo docker rmi practice-nginx-image:1.0
+sudo docker images
+```
+
+关键输出：
+
+```text
+practice-nginx-image
+practice-nginx-image
+Untagged: practice-nginx-image:1.0
+Deleted: ...
+```
+
+最终镜像列表为空；`~/dockerfile-practice` 源文件目录保留。
+
+## 2026-09-15 Docker Compose 编排验证
+
+### 创建配置
+
+```bash
+mkdir -p ~/compose-practice
+cd ~/compose-practice
+```
+
+`index.html` 关键内容：
+
+```html
+<h1>Docker Compose success</h1>
+```
+
+`docker-compose.yml` 内容：
+
+```yaml
+services:
+  web:
+    image: nginx:1.24-alpine
+    container_name: practice-compose-web
+    ports:
+      - "18082:80"
+    volumes:
+      - ./index.html:/usr/share/nginx/html/index.html:ro
+    depends_on:
+      - cache
+    restart: unless-stopped
+
+  cache:
+    image: redis:7.2-alpine
+    container_name: practice-compose-cache
+    restart: unless-stopped
+```
+
+### 检查配置并启动
+
+```bash
+sudo docker compose config
+sudo ss -lntp 'sport = :18082'
+sudo docker compose up -d
+```
+
+关键输出：
+
+```text
+name: compose-practice
+networks:
+  default:
+    name: compose-practice_default
+Network compose-practice_default Created
+Container practice-compose-cache Started
+Container practice-compose-web Started
+```
+
+### 验证服务
+
+```bash
+sudo docker compose ps
+sudo docker ps --filter name=practice-compose
+curl -I http://127.0.0.1:18082
+curl http://127.0.0.1:18082
+sudo docker compose exec cache redis-cli PING
+sudo docker compose exec cache redis-cli SET compose:practice ok
+sudo docker compose exec cache redis-cli GET compose:practice
+sudo docker compose logs --tail 20 web
+sudo docker compose logs --tail 20 cache
+```
+
+关键输出：
+
+```text
+practice-compose-cache   Up   6379/tcp
+practice-compose-web     Up   0.0.0.0:18082->80/tcp
+HTTP/1.1 200 OK
+Docker Compose success
+PONG
+OK
+"ok"
+```
+
+注意：`GET compose:practice ok` 会报 `wrong number of arguments for 'get' command`，因为 `GET` 只接受一个 key。
+
+### 清理
+
+```bash
+sudo docker compose down
+sudo docker compose ps
+sudo docker network ls | grep compose-practice
+sudo docker images
+sudo docker rmi nginx:1.24-alpine redis:7.2-alpine
+sudo docker images
+```
+
+关键输出：
+
+```text
+Container practice-compose-web Removed
+Container practice-compose-cache Removed
+Network compose-practice_default Removed
+Untagged: nginx:1.24-alpine
+Untagged: redis:7.2-alpine
+Deleted: ...
+```
+
+最终 `docker compose ps` 和 `docker images` 均为空；`~/compose-practice` 源文件目录保留。

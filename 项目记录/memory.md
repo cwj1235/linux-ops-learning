@@ -810,3 +810,40 @@ GitHub Actions 或同类流水线，实现测试、构建、镜像或发布、�
 - 持久化确认：RDB/AOF 状态均为 `ok`，无后台任务执行；`dump.rdb` 与 `appendonly.aof` 均存在，`LASTSAVE` 为 `2026-09-15 15:49:46 CST`。
 - 内存与日志确认：当前内存 793.88K、无淘汰、无拒绝连接，最近 24 小时 Redis 错误日志为空。
 - 本节已完成，不要重做。下一步进入 Docker/Compose。
+
+## 2026-09-15 Docker 安装与容器生命周期完成
+
+- CentOS 7 上已通过阿里云 Docker CE 仓库安装 Docker `26.1.4`、containerd `1.6.33` 和 Compose `2.27.1`，服务已设置开机自启。
+- Docker Hub 直连超时，已配置 `/etc/docker/daemon.json` 使用 `https://docker.m.daocloud.io`，`hello-world` 拉取和运行成功。
+- 已完成 Alpine 容器的后台运行、状态检查、`docker exec`、停止、删除容器和删除镜像验证；练习容器和镜像已清理。
+- 本节不要重做。下一步学习 Docker 数据卷、端口映射、Dockerfile，然后进入 Compose。
+
+## 2026-09-15 Docker 数据卷验证完成
+
+- 已创建并验证 `practice-volume`，宿主机路径为 `/var/lib/docker/volumes/practice-volume/_data`。
+- 第一个临时 Alpine 容器写入 `/data/check.txt` 后自动删除，第二个新容器挂载同一卷后成功读出 `docker-volume-ok`。
+- 结论：容器删除后数据卷数据仍存在；删除数据卷需使用 `docker volume rm`。
+- `practice-volume` 和 `alpine:latest` 已清理。本节不要重做，下一步学习端口映射。
+
+## 2026-09-15 Docker 端口映射验证完成
+
+- 首次运行 `nginx:alpine` 时容器退出，日志为 `pwrite() "/run/nginx.pid" failed (1: Operation not permitted)`；该问题不是端口映射导致。
+- CentOS 7 内核 `3.10` 环境下改用 `nginx:1.24-alpine` 后正常运行。
+- 已验证 `0.0.0.0:18080->80/tcp`，`curl` 返回 `HTTP/1.1 200 OK`。
+- 练习容器 `practice-nginx` 和 `nginx:1.24-alpine` 镜像已清理。本节不要重做，下一步学习 Dockerfile。
+
+## 2026-09-15 Dockerfile 自定义镜像完成
+
+- 已基于 `nginx:1.24-alpine` 编写 Dockerfile，通过 `COPY` 替换 Nginx 默认首页，通过 `CMD` 前台运行 Nginx。
+- 构建命令必须带构建上下文：`sudo docker build -t practice-nginx-image:1.0 .`。
+- 自定义镜像运行后，`curl http://127.0.0.1:18081` 成功返回 `Dockerfile build success`。
+- 练习容器和镜像已删除，最终 `docker images` 为空；`~/dockerfile-practice` 源文件目录保留。
+- 本节不要重做。下一步进入 Docker Compose。
+
+## 2026-09-15 Docker Compose 编排完成
+
+- 已用 `docker-compose.yml` 编排 `web` 和 `cache` 两个服务：Nginx 映射 `18082:80` 并挂载自定义首页，Redis 仅在 Compose 内部网络使用。
+- `docker compose config`、`up -d`、`ps`、`exec`、`logs`、`down` 均已验证。
+- Web 返回 `HTTP/1.1 200 OK` 和 `Docker Compose success`；Redis 返回 `PONG`，并成功写入、读回 `compose:practice`。
+- 容器、默认网络和练习镜像均已清理，最终 `docker images` 为空；`~/compose-practice` 源文件目录保留。
+- Docker/Compose 阶段 7 节全部完成，不要重做。下一步提交学习记录。

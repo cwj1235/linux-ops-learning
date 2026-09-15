@@ -1617,3 +1617,80 @@ Linux 运维强化基础检查已经完成。下一步可先做一次阶段复�
 
 1. 进入 Docker/Compose。
 2. 优先完成 Docker 安装、镜像、容器、端口映射和数据卷基础。
+
+## 2026-09-15 Docker 安装与容器生命周期完成
+
+- 系统为 CentOS 7，内核 `3.10.0-1160.el7.x86_64`；安装前 Docker 不存在。
+- Docker 官方仓库访问失败后，已改用阿里云 Docker CE 仓库并成功安装。
+- 已安装 `docker-ce 26.1.4`、`docker-ce-cli 26.1.4`、`containerd.io 1.6.33`、`docker-compose-plugin 2.27.1`。
+- `sudo systemctl enable --now docker` 已执行，Docker 客户端和服务端均正常。
+- Docker Hub 首次拉取 `hello-world` 超时；配置 `/etc/docker/daemon.json` 使用 `https://docker.m.daocloud.io` 后拉取和运行成功。
+- 已完成 `hello-world` 与 `alpine:latest` 的镜像拉取、容器运行、状态检查、`docker exec`、停止、删除容器和删除镜像验证。
+- Alpine 容器停止状态为 `Exited (137)`，原因是 `docker stop` 超时后发送 `SIGKILL`；容器随后已删除，练习镜像也已清理。
+- 本节不要重做。下一步学习 Docker 数据卷和端口映射，再进入 Dockerfile 与 Compose。
+
+## 当前下一步（最新）
+
+1. 学习 Docker 数据卷，验证容器删除后宿主机数据仍保留。
+2. 学习端口映射，验证宿主机端口访问容器内服务。
+3. 再学习 Dockerfile 基础和 Docker Compose。
+
+## 2026-09-15 Docker 数据卷验证完成
+
+- 已创建 `practice-volume`，`docker volume inspect` 确认宿主机路径为 `/var/lib/docker/volumes/practice-volume/_data`。
+- 第一个 `--rm` Alpine 容器向 `/data/check.txt` 写入 `docker-volume-ok` 后退出并自动删除。
+- 第二个新的 `--rm` Alpine 容器挂载同一个数据卷，成功读出 `docker-volume-ok`。
+- 结论：数据保存在 volume 中，不随容器删除而丢失。
+- 已执行 `docker volume rm practice-volume`，并删除 `alpine:latest`，练习环境已清理。
+- 本节不要重做。下一步学习 Docker 端口映射。
+
+## 当前下一步（最新）
+
+1. 学习 Docker 端口映射，验证宿主机端口可以访问容器内服务。
+2. 再学习 Dockerfile 基础和 Docker Compose。
+
+## 2026-09-15 Docker 端口映射验证完成
+
+- 宿主机 `18080` 端口启动前为空闲；首次使用 `nginx:alpine` 创建容器成功但退出，`ExitCode=1`、`OOM=false`。
+- 失败日志为 `pwrite() "/run/nginx.pid" failed (1: Operation not permitted)`；判断为应用启动失败，不是端口映射失败。
+- 该环境为 CentOS 7、内核 `3.10`、Docker `26.1.4`，改用固定版本 `nginx:1.24-alpine` 后正常。
+- 成功状态：容器 `Up`，端口映射 `0.0.0.0:18080->80/tcp`，`curl -I http://127.0.0.1:18080` 返回 `HTTP/1.1 200 OK`。
+- 已停止并删除 `practice-nginx`，并删除 `nginx:1.24-alpine` 镜像。
+- 本节不要重做。下一步学习 Dockerfile，再进入 Compose。
+
+## 当前下一步（最新）
+
+1. 学习 Dockerfile 基础，制作并运行一个简单自定义镜像。
+2. 再进入 Docker Compose。
+
+## 2026-09-15 Dockerfile 自定义镜像完成
+
+- 已在 `~/dockerfile-practice` 创建 `Dockerfile` 和 `index.html`，基于 `nginx:1.24-alpine` 构建自定义镜像。
+- Dockerfile 使用 `FROM`、`COPY`、`EXPOSE`、`CMD`；已区分 `COPY` 构建时复制文件和 `CMD` 运行时默认命令。
+- 第一次 `docker build` 少了构建上下文 `.`，报 `requires exactly 1 argument`；改为 `sudo docker build -t practice-nginx-image:1.0 .` 后构建成功。
+- 已运行自定义镜像并映射 `18081:80`，`curl` 能读回自定义页面 `Dockerfile build success`。
+- 已停止并删除 `practice-nginx-image` 容器，删除 `practice-nginx-image:1.0` 镜像，最终 `docker images` 为空。
+- `sudo docker image` 单独执行显示帮助是正常现象，查看列表应使用 `docker images`。
+- `~/dockerfile-practice` 源文件目录保留。本节不要重做。下一步进入 Docker Compose。
+
+## 当前下一步（最新）
+
+1. 进入 Docker Compose，编写并运行一个简单多容器编排。
+
+## 2026-09-15 Docker Compose 编排完成
+
+- 已在 `~/compose-practice` 创建 `index.html` 和 `docker-compose.yml`，定义 `web` 与 `cache` 两个服务。
+- `web` 使用 `nginx:1.24-alpine`，映射 `18082:80`，只读挂载自定义首页；`cache` 使用 `redis:7.2-alpine`，不暴露宿主机端口。
+- `docker compose config` 解析出项目名 `compose-practice`、默认网络 `compose-practice_default` 和 `depends_on` 启动顺序。
+- `docker compose up -d` 成功创建默认网络并启动 `practice-compose-cache`、`practice-compose-web`，两个服务均为 `Up`。
+- Web 验证：`curl -I` 返回 `HTTP/1.1 200 OK`，页面返回 `Docker Compose success`。
+- Cache 验证：Redis `PING` 返回 `PONG`，`SET` 返回 `OK`，`GET compose:practice` 返回 `"ok"`。
+- 第一次 `GET` 命令多传了 `ok` 参数导致 `wrong number of arguments`，去掉多余参数后验证成功。
+- Redis 容器日志提示容器网络命名空间内 `somaxconn=128`，与宿主机正式 Redis 的 `1024` 不同；不影响本节基础验证，未调整。
+- `docker compose down` 已删除两个容器和默认网络，`nginx:1.24-alpine`、`redis:7.2-alpine` 镜像也已删除，最终 `docker images` 为空。
+- `~/compose-practice` 源文件目录保留。本节不要重做。下一步提交 Docker/Compose 阶段记录。
+
+## 当前下一步（最新）
+
+1. 检查并提交 Docker/Compose 阶段学习记录。
+2. 推送到远程仓库后，再规划下一阶段学习内容。
