@@ -6,6 +6,51 @@
 
 归档位置：`项目记录/memory.md`。
 
+## 当前接续点（2026-09-15 allkeys-lru 小节已完成）
+
+- 2026-09-14 内存基线与运行时上限小节：调整前内存快照：整机 total=1980 MiB、used=936、free=247、buff/cache=796、available=866（约 44%），Swap 2047 MiB、used=0；Redis used_memory=812936 字节（793.88K）、RSS=6045696 字节（5.77M）、碎片率=7.44，maxmemory=0、策略 noeviction。 本次快照未见明显内存压力；小内存实例的高 RSS/used_memory 比率不单独判作泄漏或严重碎片。用户执行 `redis-cli -p 6379 CONFIG SET maxmemory 134217728` 返回 `OK`，随后 CONFIG GET 返回 `maxmemory` 与 `134217728`，确认正式实例运行时上限为 128 MiB。本次只修改 maxmemory，没有修改淘汰策略。 128 MiB 是学习用预算，不是生产通用值、预分配量或进程 RSS 硬上限。
+- `/etc/redis.conf` 第 537 行已写入 `maxmemory 134217728`，修改前备份为 `/etc/redis.conf.before-maxmemory-20260914-165752`。2026-09-14 17:10:21 CST 正式 redis 服务重启后为 `active (running)`，主进程 PID 9261，ExecStop 为 `0/SUCCESS`，仍为 enabled；用户未重新 CONFIG SET，直接 CONFIG GET maxmemory 返回 `134217728`，128 MiB 上限的服务重启加载验收通过。 不再重复 CONFIG SET、文件编辑或服务重启；原运行值 0 和备份保留为回滚参考，未执行回滚、CONFIG REWRITE 或内核参数调整。
+- 本轮重启后，用户执行 `redis-cli -p 6379 MGET practice:rdb-check practice:aof-check`，依次读回 `rdb-ok`、`aof-ok`；`redis-cli -p 6379 CONFIG GET maxmemory-policy` 返回 `noeviction`。结合此前 maxmemory 读回，正式实例当前为 128 MiB 上限、noeviction 策略。仅确认两个指定字符串键与策略值，未重读 Hash 或 AOF 加载日志，也未验证全部键完整性、整机重启或超限拒写。
+- 2026-09-14 noeviction 隔离超限演练已完成：6381 端口先确认空闲；隔离实例目录 `/var/lib/redis-noeviction-20260914`，`maxmemory=1048576`、策略 noeviction、AOF 与自动保存关闭。写入 65536 字节 value 时，前 6 个 key 成功，第 7 个开始返回 OOM 拒写；已有键仍可读，DEL 后写入恢复。`GET practice:noeviction` 为 nil 是 key 名少了编号，不是读取失败。
+- 查询时 `used_memory=923152 < maxmemory=1048576` 不推翻第 7 次 OOM：INFO 是事后值，不是写入瞬间峰值。旧版 Redis 3.2 的 `redis-cli` 收到服务端 OOM 时退出码可能仍为 0，不能用 `||` 依赖退出码判断业务失败。用户已执行 `SHUTDOWN NOSAVE`，6381 连接拒绝、6379 返回 PONG。随后只读检查 `/var/lib/redis-noeviction-20260914`：目录属主 `redis:redis`，仅剩 2745 字节 `redis.log`，无 RDB/AOF/pid 文件；`--save ""`、`--appendonly no` 和正常退出后的 pid 清理均符合预期。
+- noeviction 临时目录最终清理已完成：`rm -i` 确认删除 `redis.log`，`rmdir` 删除空目录，`ls -ld` 返回“没有那个文件或目录”；6381 仍拒绝连接，6379 仍返回 PONG。不要重做该实验或再次清理该目录，不填满正式 `6379`，不重做已结束的 `6380` 回灌实验。
+- 2026-09-15 allkeys-lru 小节已完成：6381 端口先确认空闲；隔离目录 `/var/lib/redis-allkeys-lru-20260915`，配置为 1 MiB maxmemory、allkeys-lru、AOF 与自动保存关闭。30 次 65536 字节 value 写入全部成功，`evicted_keys=24`，最终 `DBSIZE=6`，仅剩 `practice:allkeys-lru:25` 至 `practice:allkeys-lru:30`。`SHUTDOWN NOSAVE` 后 6381 拒绝连接、6379 返回 PONG；`rm -i` 删除日志、`rmdir` 删除目录并确认目录不存在。不要重做该实验或再次清理该目录。
+- 2026-09-14 启动警告只读核验完成：用户只读实测 `net.core.somaxconn=128`、`vm.overcommit_memory=0`，THP 输出 `[always] madvise never`，当前生效选项为 `always`。三项与此前启动警告一致，但不能据此认定当前内存不足或已出现性能故障。 `sysctl` 与 `systemctl` 的区别已讲解。本轮未调整内核参数、配置开机持久化或重启服务。随后整机和 Redis 内存快照及 128 MiB 运行时上限也已验证，内核参数仍未修改。
+- 2026-09-14 指定 RDB 回灌已收尾：恢复原理、启动方式和 `sudo -u redis` 已讲解；`6380` 的 GET/HGETALL 读回 `rdb-ok` 与 `ip=192.168.6.100`，随后 `SHUTDOWN NOSAVE`、`6380` 连接被拒绝和 `6379 PONG` 已验证。用户又核对临时目录仅有 158 字节的 RDB 副本和 2.8K 日志、原始备份仍为 158 字节；对两个临时文件分别确认 `rm -i` 删除，`rmdir` 后 ls 返回目录不存在，临时目录清理完成。原始备份和正式数据/AOF 不在删除范围。后续三项内核参数只读核验也已完成，尚未修改参数。本次按小节统一记录，助手未连接虚拟机，也未提交或推送。
+- 已按本项目目录筛选并核对 18 条历史交互会话（不含当前任务），对应 40 份原始/恢复记录，包含归档会话；没有使用其他项目的记忆。早期章节保留为历史，不能将其中的“下一步”当成最新停点。
+- 主线已经进入阶段 3“服务运维深化”的 Redis 入门，不是还在 Python，也不是准备首次安装 Redis。阶段 0、1 的基础复习与巡检产物已完成；Git/Python 基础脚本闭环已完成，但不代表所有进阶知识都已学完。
+- 最新进度来自 2026-09-14 用户回传：AOF 配置查询、在线启用、AOF 文件生成、配置文件持久化、写入测试、重启后键读回及 `DB loaded from append only file` 启动日志均已验证；随后使用临时目录和端口 `6380` 实际加载指定 RDB 备份，读回 2 个键并在日志中看到 `DB loaded from disk`，本次按小节统一记录。三项启动警告的内核参数只读核验已完成，断电恢复和内存/性能调优仍未完成。AOF 练习键暂不清理；隔离 `6380` 已读回具体键值并验证关闭，临时副本、日志与目录也已清理并确认目录不存在；助手未代替用户运行虚拟机命令。
+- Redis 已实际安装 `3.2.12-2.el7`，启动并设置开机自启；当时为 `active (running)` / `enabled`，监听 `127.0.0.1:6379`，`redis-cli ping` 返回 `PONG`。
+- 已实际验证 String 的 `SET/GET/DEL`、`SET ... EX 30` 与 `TTL`、计数器 `INCR/INCRBY/DECR`，以及 Hash 的 `HSET/HGET/HGETALL/HDEL`。
+- 用户分别用 `HGET` 读到 `ip=192.168.6.100`、`role=all-in-one`，并用 `HGETALL` 核对两个字段。误输入 `HDET` 收到未知命令错误，改为 `HDEL server:centos100 role` 后返回 `1`；最后 `HGETALL` 仅剩 `ip=192.168.6.100`，整个键未被删除。
+- 键/字段检查已实测：`EXISTS server:centos100` 返回 `1`，`HEXISTS server:centos100 role` 返回 `0`；最新 `TYPE server:centos100` 返回 `hash`、`HLEN server:centos100` 返回 `1`。类型和字段数量与此前仅保留 `ip` 的结果一致；存在性检查的 `0` 不是命令失败，也不是 Shell 的 `$?` 退出码。
+- List 基础小节已验证：`RPUSH practice:checks nginx mariadb` 返回 `2`，`LRANGE` 显示 `nginx → mariadb`；两次 `LPOP` 依次取出 `nginx`、`mariadb`，`LLEN` 分别返回 `1`、`0`，最后 `EXISTS practice:checks` 返回 `0`。已验证右端加入、左端取出的 FIFO 和取空后键自动消失；没有执行 `DEL`，只是名称数据练习，没有实际运行巡检。
+- Set 基础小节已验证 `SADD/SMEMBERS/SCARD/SISMEMBER/SREM`、去重、成员判断和删除。`practice:services` 初始传入重复的 `nginx`，实际新增 2 个成员；最后删除 `mariadb` 返回 `1`，`SMEMBERS` 返回 `(empty list or set)`，`EXISTS` 返回 `0`，集合键已自动消失。最后检查用的是 `SMEMBERS`，没有回传取空后的 `SCARD` 结果，不能补记为 `SCARD=0`。
+- ZSet 基础小节已验证 `ZADD/ZRANGE/ZSCORE/ZCARD/ZREVRANGE/ZREM`。`practice:priority` 首次新增三个成员；把已有 `nginx` 的分数从 `20` 改成 `5` 时，`ZADD` 返回 `0`，`ZSCORE` 返回 `"5"`、`ZCARD` 仍为 `3`。升序为 `nginx(5) → mariadb(10) → redis(30)`，倒序相反，确认更新分数不会新增成员，但会改变排序。
+- ZSet 收尾已实测：`ZREM practice:priority nginx mariadb redis` 返回 `3`，随后 `ZCARD` 返回 `0`、`EXISTS` 返回 `0`；键随全部成员删除而自动消失。已结束的 `practice:checks`、`practice:services`、`practice:priority` 三个练习键均已确认不存在；后续新建的 RDB 练习键不在此清理结论内。本节只操作名称和分数，没有修改真实服务优先级。
+- 配置路径已核对：systemd 的 `ExecStart` 和运行中的 `INFO server` 均指向 `/etc/redis.conf`；`CONFIG GET` 的 `bind=127.0.0.1`、`port=6379`、`logfile=/var/log/redis/redis.log` 与文件第 61、84、163 行一致，只核对了这三项，不是审计全部配置。
+- 重启前保护模式查询为 `yes`，`ss` 返回 `LISTEN 0 128 127.0.0.1:6379 *:*`，进程 `redis-server`、`pid=1207`、`fd=4`。这是重启前的回环监听证据，重启后没有重跑 ss；对端列 `*:*` 不表示监听所有网卡，队列值和文件描述符都不是客户端数。
+- 配置与日志小节曾读取末尾 20 行，看到 9 月 13 日四轮 RDB 自动保存成功，最后结束于 `14:27:39.157`；该部分是历史日志核验，不是手动实验。该小节当时未修改配置、重启或开放端口；随后 RDB 小节已实际重启，相同日志重复粘贴不另记执行次数。
+- RDB 运行配置已查明：`save="900 1 300 10 60 10000"`、`dir=/var/lib/redis`、`dbfilename=dump.rdb`。保存规则每组内部为“且”，三组之间为“或”。131 字节、14:27 是写入练习键前的文件基线；随后重启前核对源文件和备份均为 158 字节、`redis/redis`、修改时间 17:35。重启后未再次检查文件大小或内容一致性。
+- 手动保存阶段：用户写入 `practice:rdb-check=rdb-ok`，误敲 GRT 后改为 GET；BGSAVE 启动后，INFO 的 in_progress=0、status=ok、changes=0 确认保存成功，当时 `rdb_last_save_time=1789292105`、`aof_enabled=0`。后续正常重启后另一次 GET 仍返回 `rdb-ok`，不要把两次读取混为一条证据；练习键没有清理，继续保留。
+- 快照复制和重启前比对已验证：备份为 `/var/lib/redis/dump.rdb.before-restart-20260913-183303`，不带 `-s` 的 `sudo cmp` 无输出，紧随其后的 `echo $?` 返回 `0`，确认当时逐字节一致。早期只贴出的 `cmp -s ... && echo ... || echo ...` 不计为执行；该写法会混淆不同与报错，整行结束后的 `$?` 通常又变成 echo 的状态。
+- 正常重启已验证：`systemctl restart redis` 后状态为 `active (running)`，启动时间 `2026-09-13 23:45:36 CST`，主进程 `3047`，ExecStop 为 `status=0/SUCCESS`，开机自启仍是 enabled。`vendor preset: disabled` 是默认策略，不抵消当前 enabled；重启后的 GET 返回 `rdb-ok`。
+- 重启后 INFO 返回 `loading=0`、`rdb_changes_since_last_save=0`、`rdb_bgsave_in_progress=0`、`rdb_last_save_time=1789314336`、`rdb_last_bgsave_status=ok`、`aof_enabled=0`。两项 RDB 保存耗时为 `-1`，不能当作失败或新进程已执行过 BGSAVE；更新时间戳也不单独证明又做了一次后台保存。
+- PID 3047 的启动日志显示 `DB loaded from disk: 0.000 seconds` 和接受 6379 连接的就绪信息；结合 AOF 关闭及重启后的 GET，确认正常启动加载 RDB 并读回练习数据。正常停止可能再次保存 RDB，因此不能声称已验证指定备份回灌、宕机/断电恢复或全部键的完整性；备份与练习键均未清理。
+- 启动日志曾提示请求 backlog=511 而 somaxconn=128、overcommit_memory=0、THP 开启；本任务已只读核实内核值为 128、0、always。它们是连接排队、内存分配和延迟风险提示，不是启动或加载失败，也不是当前资源不足的直接证据；尚未修改参数，先检查整机和 Redis 内存，再评估整机级改动。
+- cp/scp 区别及 `cp -anv`、时间文件名已讲解；cp 用于当前系统可直接访问的路径，scp 主要经 SSH 跨主机复制，两者参数不能照搬。真实 Redis 快照的 cp 已有结果，但此前用于讲解的示例文件复制及 scp 上传仍没有实操证据。
+- AOF 小节已完成：`CONFIG GET appendonly` 返回 `no`、`appendfsync` 返回 `everysec`；旧版 Redis 3.2 的 `CONFIG GET appendfilename` 返回空，实际配置文件第 597 行确认 `appendfilename "appendonly.aof"`。启用前 AOF 文件不存在，根分区可用约 12G、使用率 34%，配置备份为 `/etc/redis.conf.before-aof-20260914-094538`。
+- `CONFIG SET appendonly yes` 返回 `OK`，INFO 显示 `aof_enabled:1`、重写未进行、最近重写与写入状态均为 `ok`；AOF 文件生成，大小 139 字节。`CONFIG REWRITE` 因 Redis 用户无 `/etc` 目录写权限返回 `Permission denied`，随后管理员用 `sed` 将 `/etc/redis.conf` 第 593 行改为 `appendonly yes`，完成磁盘配置持久化。
+- 写入 `practice:aof-check=aof-ok` 后重启，GET 返回 `aof-ok`；启动日志明确显示 `DB loaded from append only file`，确认 AOF 恢复。指定 RDB 恢复、具体键值与临时实例关闭均已验证；临时目录亦已清理；三项启动警告已完成只读核验；内存基线和 128 MiB 运行值也已验证；128 MiB 上限已写入配置文件并备份，服务重启后的加载验收也已通过；本轮重启后的两个练习字符串键与 noeviction 策略也已读回。当时“先检查 6381”的停点已经完成，后续 noeviction、allkeys-lru 超限演练和最终清理也已收尾；下一步优先做 `volatile-lru` 隔离实验，再评估内核参数调整、故障与巡检集成，最后进入 Docker/Compose；保留 CentOS 7 隔离实验环境，不暴露旧版 Redis 到公网。
+- 本地此前漏记了 9 月 12 日晚的 Redis 课程；现已补入 `学习总结/ops_redis_basics.md`、命令履历、交接和首页。Python 归档后的记录提交 `22b3b24` 也有用户成功推送及 clean 输出，不需要重复完成旧步骤。
+- 模型切换是独立支线：用户已于 9 月 12 日返回 `diagnose` 结果“任务列表在检查期间发生变化，请关闭其他配置工具后重试”，不是仍在等待诊断输出。错误尚未修复、真实全局切换未验收；本次不修改全局配置或工具，也不让它打断 Redis 主线。
+
+## 2026-09-13 项目文件全文复核
+
+- 已全文阅读当前 23 份项目正文：11 篇学习笔记、4 份项目记录、2 份脚本、2 份巡检设计/计划文档及 4 份根目录文本；不含 `.git` 内部对象、Codex 本地运行目录和 `%SystemDrive%` 下的 Windows 缓存。
+- 已修正 Python 阶段总结中“尚未提交”的过期描述；`d573677` 和后续补档 `22b3b24` 均有成功推送记录。后续修改以实时 `git status` 为准，不把历史 clean 当作当前状态。
+- 全文复核当时的停点是 Redis Hash 的 `HGET`、`HDEL`，之后的用户实操进度以顶部为准。已讲解或已规划的内容不等于实操完成；该次复核仅修正文档，未连接虚拟机、未执行新实验，也未提交或推送。
+
 ## 稳定背景
 
 - 用户是本科生，正在从零学习 Linux 运维与云运维，目标是明年具备寻找运维实习的能力。
@@ -18,9 +63,11 @@
 
 - 固定节奏：概念 → 命令 → 用户执行 → 解释输出 → 总结 → 下一步。
 - 每次优先给 1～3 条命令，避免一次堆太多内容。
+- 响应偏好（2026-09-13 明确）：希望更快回复，但不缩短讲解或降低准确性。减少不必要的重复查阅，保留必要核对；依据实际输出区分已验证、待验证和推测，不编补缺失结果，也不为提速提前推进。
 - 每条命令解释用途、语法和参数。
 - 用户问“什么意思”时，先暂停进度并解释清楚。
 - 用户发回命令输出后，必须根据真实结果判断状态，不能假设执行成功。
+- 记录频率（2026-09-13 用户调整）：不再每完成一条命令或收到一次输出就修改文件；完成一个小节的讲解、练习和验证后，再统一更新模块笔记、命令履历、交接和记忆。小节进行中先在会话里保留待汇总要点，只解释结果并继续教学。
 - 每节课开头说明：本节位置、与前面知识的关系、真实运维场景、今天目标。
 - 用户经常回复“好的”表示继续下一步。
 - 用户喜欢“一句话记住”、判断题式排障和结合当前虚拟机环境的说明。
@@ -81,7 +128,7 @@ Windows VMnet8：192.168.6.1/24
 80/tcp：Nginx
 8080/tcp：backend-demo 后端服务
 3306/tcp：MariaDB/MySQL
-6379/tcp：后续 Redis
+6379/tcp：Redis（最近实测监听 127.0.0.1）
 ```
 
 ## 已完成：Linux 与网络基础第一阶段
@@ -160,7 +207,7 @@ role=all-in-one
 - 已重新授予 DELETE，并用 `SHOW GRANTS` 确认最终恢复 SELECT、INSERT、UPDATE、DELETE。
 - 不记录练习密码或密码哈希。
 
-## 当前准确进度
+## 历史进度（2026-07-11）
 
 ```text
 Linux 基础第一阶段：完成
@@ -172,7 +219,7 @@ MySQL 安装、基础 SQL、备份恢复、脚本、定时备份、保留策略�
 MySQL 用户权限、最小权限、GRANT、REVOKE 验证：完成
 ```
 
-## 下一步
+## 历史路线调整（2026-08-26，当前已推进）
 
 ```text
 旧的“MySQL 故障排查 -> Redis”顺序暂停直接推进。
@@ -680,3 +727,86 @@ GitHub Actions 或同类流水线，实现测试、构建、镜像或发布、�
 - 已成功推送到 `origin/main`，远程从 `144be20` 更新到 `d573677`。
 - 最终工作区干净，本地 `main` 与 `origin/main` 同步。
 - Python 脚本和完整学习记录已纳入 GitHub；日志文件因 `*.log` 规则仍不纳入版本库。
+
+## 2026-09-12 Codex 模型菜单排查
+
+- 全局 `~/.codex/config.toml` 的模型标识为 `gpt-6-astra`，接入方为 `AnyRouter`，推理强度为 `high`；当前会话记录一致。这只能确认客户端调用标识，不能验证第三方后端真实型号。
+- 使用本机 `0.153.0-alpha.5` app-server 在临时独立 `CODEX_HOME` 中验证：不加载自定义目录时，`model/list` 仍返回内置的 GPT-5.6 Sol/Terra/Luna、GPT-5.5、GPT-5.2，不包含 `gpt-6-astra`。
+- 全局配置未设置 `model_catalog_json`；已有 `~/.codex/cc-switch-model-catalog.json` 只有 `gpt-5.6-sol`，隔离加载后列表也只有该项。目录缺项已复现，但该结果只涉及模型列表，不证明能够跨服务商切换。
+- 本次未修改全局配置、认证信息或既有任务；运维课程进度不变。
+
+## 2026-09-12 Codex 多服务商约束修正
+
+- 用户明确说明 `gpt-5.6-sol` 与 `gpt-6-astra` 使用不同的服务商地址、密钥和其他设置；不能仅合并模型目录后就假定可以正确切换。
+- 本机配置已存在 `agentrouter`、`AnyRouter` 两个独立 provider 段，当前选中 `AnyRouter`；未输出或复制凭据。随后只读检查近期会话元数据，观察到 `agentrouter` 与 `gpt-5.6-sol` 配对、`AnyRouter` 与 `gpt-6-astra` 配对。
+- 修复应保持模型与对应 provider、目录及参数成套匹配；`model_catalog_json` 本身不负责按模型切换地址或密钥。全局默认切换也不能保证迁移所有既有任务。
+- 已安装版本的协议在任务启动、恢复时有独立的 `modelProvider` 字段；尚未验证桌面界面是否暴露按任务选择服务商的入口。
+
+## 2026-09-12 Codex 全局切换需求与隔离验证
+
+- 用户明确要求全局统一：选用 `gpt-6-astra` 时全部项目、会话都能使用它；切到 `gpt-5.6-sol` 时同样全部可用，不要求不同会话同时使用不同服务商。
+- 在临时独立 `CODEX_HOME` 中使用合成会话验证：全局从模型/服务商 A 改为 B 后，新会话采用 B，但直接恢复旧会话仍采用原来的 A。不能承诺只改全局配置、重启即可同步所有旧会话。
+- 已验证可持久化的路径：以目标 `model`、`modelProvider` 调用 `thread/resume`，再调用 `thread/settings/update` 保存目标模型及推理强度；关闭并重启测试 app-server 后，不带覆盖参数恢复该旧会话仍得到 B。没有删除会话历史，也未调用真实服务商。
+- 后续全局切换方案应同时更新默认模型/服务商和既有会话设置，模型目录只负责菜单显示。执行前需备份、停止运行中的任务，并验证目标范围及回退方式；不要直接改写真实会话日志或数据库。
+- 本次只修改项目记录，未执行真实全局切换。全局 `.codex` 当前不可写；如生成切换工具，应在可写目录准备并隔离验证，再由用户明确执行。
+- 用户要求在执行前明确说明修改哪些文件、目录及其影响，区分已完成的记录/隔离测试与尚未实施的全局变更。不要把方案确认当作已执行切换。
+
+## 2026-09-12 Codex 全局切换工具准备完成
+
+- 工具已确认安装在 `C:\Users\陈伟钜\.codex\model-switch`，入口 `switch_model.py`，中文说明 `README.md`。用户要求长期工具不能只放 `%TEMP%`，应与 Codex 配置放在一起，不再采用 `D:\tools`，不混入运维项目代码。三个核心 Python 模块的 SHA256 与隔离测试通过的版本一致，固定目录只读预览通过；清理临时副本 `D:\temp\codex-global-model-switch` 不影响正式安装。
+- 确认固定目录复制完成后，在 PowerShell 运行 `python "$HOME\.codex\model-switch\switch_model.py" astra` 仅预览。待所有任务结束、完全退出 Codex 桌面和 CLI 后，在独立 PowerShell 中加 `--apply` 执行；`sol --apply` 切到另一套，`restore --apply` 恢复最近完成的备份。复制工具本身不要求退出 Codex，不会触发模型切换。
+- 实际修改用户级 `.codex/config.toml` 的模型/provider/推理强度/目录引用及默认服务等级、`.codex/custom-models.json`，通过原生接口更新本机已保存交互会话（含归档）。不改 provider 地址或凭据，不直接编辑 SQLite/JSONL，不发送模型回合，不改项目源代码。
+- 备份留在用户级 `.codex/model-switch-backups`；原配置可能含凭据，不能上传或纳入 Git。遇到项目模型或 provider 覆盖、配置竞争、程序仍在运行、运行时版本不符时停止，不擅自改项目配置。
+- 最终版本在合成配置、占位凭据和 3 个临时会话中通过 Astra/Sol 往返与双次恢复、归档保留、历史正文及权限不变、失败自动回退、并发保护、损坏备份拒绝和 TOML 保留验证；模型目录接口、Python 编译与两个 PowerShell 入口预览通过。
+- 最新只读检查：全局组合为 `gpt-6-astra` / `AnyRouter`，未发现切换锁或正式备份目录。助手未执行真实 `--apply`，不能把当前默认组合当作所有旧任务已同步；当前权限只允许读取全局 `.codex`，用户需退出应用后手动执行。桌面重启后的菜单显示及真实服务商推理尚未验证；工具只针对本机，排除云端、其他主机及代理内部任务，锁定 Codex `0.153.0-alpha.5`。
+- 新需求：用户说明 Agentrouter 还提供 `glm-5.3`、DeepSeek 等模型，希望切到该服务商后也能使用它们。当前安装工具只有 `astra` / `sol` 两个固定组合，且生成单模型目录，尚不支持此需求；不能把未实现的新模型参数当成可执行命令。
+- 用户提供的 Agentrouter 模型列表截图中，五个标识为 `gpt-5.6-sol`、`claude-opus-4-8`、`claude-opus-5`、`deepseek-v4-flash`、`glm-5.3`。这是服务商列出的调用标识，不证明真实后端型号；截图上的 `openai` / `anthropic` 标签不足以确认 Responses 和工具调用兼容性。
+- 用户最终缩小范围：Agentrouter 只在 `gpt-5.6-sol` 之外增加 `glm-5.3`，不加入 Claude、DeepSeek；AnyRouter 只保留 `gpt-6-astra`，原有行为不改。该范围已经明确，不再反复询问全套多模型方案。
+
+## 2026-09-12 Agentrouter GLM 更新包完成，用户预览通过
+
+- 更新源码及 ZIP 曾暂存于 `C:\Users\陈伟钜\.codex\visualizations\2026\09\12\01a0944e-1a2f-7dd0-ab46-3b4af6d85242`。正式安装校验后，这些重复副本已按用户要求清理；后续直接使用正式目录，不再执行旧安装或清理命令。
+- 新版保留 `astra` / `sol` / `restore`，新增 `glm`。`sol --apply` 使用 Agentrouter + GPT 并生成 Sol/GLM 双模型菜单；`glm --apply` 批量统一为 Agentrouter + GLM；`astra --apply` 仍为 AnyRouter + Astra 单模型菜单。右下角选模型不是批量同步；当前桌面版本是否另外将菜单选择写回全局默认尚未做实际前后对比，不能据此断言 `config.toml` 一定不变。
+- AnyRouter/Astra 的目录字节和配置写入行为与旧版对比一致。GLM 采用客户端 `none` 档位、文本输入和 32768 token 预算（实际有效 31129）；这是保守客户端设置，不是服务商能力认证，历史不会被删除但可能触发上下文压缩。
+- 本地模拟接口验证表明 Codex 仍发送 `reasoning.effort=none`、`summary=auto` 和 `parallel_tool_calls=true`；不能声称目录声明会移除这些字段。已验证本地 Responses 文本回复、动态函数调用及工具结果回传，尚未调用真实 Agentrouter/GLM 接口。
+- 三个合成任务含归档已通过 Sol/GLM/Astra 往返及逐次恢复、GLM 注入失败回退、消息及工具调用/结果保存、权限和 provider 数据保留。三个目录的默认项、Python 编译、PowerShell 入口、ZIP 安装模拟和旧工具备份校验通过。
+- 正式安装目录 `C:\Users\陈伟钜\.codex\model-switch` 对助手仍只读。用户已贴出新版预览结果：当前全局为 `gpt-6-astra` / `AnyRouter`，目标为 `glm-5.3` / `agentrouter`，能列出 Agentrouter 的 Sol/GLM 双模型菜单；输出明确为“仅预览”，未改配置、未迁移任务。不能据此声称已经实际切换或全部任务已同步。
+- 用户再次强调只在原有 Agentrouter 菜单增加 GLM 选项，不需要全局改成 GLM，也不需要继续扩展工具。后续要使用 Agentrouter 时沿用 `sol --apply`，默认仍为 Sol，并生成双模型菜单；仅在用户明确要所有任务统一使用 GLM 时才引导 `glm --apply`。继续使用 AnyRouter 时无需执行切换命令。
+
+## 2026-09-12 正式安装验收与残留清理完成
+
+- 已只读核对正式目录 `C:\Users\陈伟钜\.codex\model-switch` 的 7 个交付文件，SHA256 全部与更新源码一致；正式入口 `python -B ...\switch_model.py sol` 预览通过，列出 Sol/GLM 双模型菜单。工具更新已经安装完整，但当前全局仍为 `gpt-6-astra` / `AnyRouter`，未验证真实 GLM 调用，也未确认用户执行过全局切换。
+- 用户已返回清理成功输出：删除 `D:\temp` 下本次生成的 41 个测试/旧源码目录、更新源码副本及 ZIP，共 43 项、3411 个文件、约 106.9 MiB；一次性清理脚本也已自删。脚本完成后验证正式工具和全局配置未变。随后只读确认更新源码、ZIP、清理脚本和旧临时工具均不存在，正式目录 7 个交付文件齐全。
+- 保留正式工具、唯一旧版备份 `C:\Users\陈伟钜\.codex\model-switch-code-backup-20260912-180735`、真实配置、密钥、聊天记录和用户截图。备份存在已只读确认；后续无需重复清理或重新生成安装包。
+- 清理曾受权限阻碍：助手删除命令被沙盒拒绝，普通用户 PowerShell 又无法枚举沙盒账户拥有的受保护测试目录。已指导用户在管理员 PowerShell 运行限定路径的脚本，并收到成功结果；没有修改目录所有者或 ACL，也没有对整个临时目录放宽权限。
+
+## 2026-09-12 首次真实切换预检失败，等待具体诊断
+
+- 用户执行 `sol --apply` 后停在“读取全部已保存交互会话设置”，旧脚本只输出通用错误，不能据此判断根因。只读确认全局仍为 `gpt-6-astra` / `AnyRouter`，没有正式切换备份目录；当前桌面和工具固定运行时均为 `0.153.0-alpha.5`。尚未修复或验证真实切换，不得报告全局同步成功。
+- 获准仅修改正式目录的 `switch_model.py`、`runtime_client.py`、`README.md` 后，已原位补上失败阶段、接口名称、错误码及安全分类；不输出原始 RPC 响应或日志。新增 `python -B "C:\Users\陈伟钜\.codex\model-switch\switch_model.py" diagnose`，只初始化接口和读取任务列表，不恢复任务、不解除归档、不切换模型，可在桌面打开时由用户执行；拒绝与 `--apply` 合用。
+- 内存语法及 18 项模拟检查通过，覆盖预检归档恢复、诊断不执行模型/归档变更和凭据内容不泄露；尚未运行新的真实服务诊断。下一步只需用户返回 `diagnose` 输出以定位实际失败，不应继续盲目执行真实切换、扩展功能或生成更新包。用户明确反馈排查太慢，后续应缩小排查范围、给出最短可执行步骤。
+## 2026-09-15 Redis volatile-lru 小节完成
+
+- 已在 `127.0.0.1:6381` 使用独立目录 `/var/lib/redis-volatile-lru-20260915` 完成 `volatile-lru` 隔离演练。
+- 验证配置：`maxmemory=1048576`、`maxmemory-policy=volatile-lru`、`appendonly=no`、`save=""`。
+- 先写入 3 个无 TTL key，再写入 30 个使用 `EX 86400` 的 key，每个 value 为 65536 字节；带 TTL key 全部写入成功。
+- 结果：`evicted_keys=27`、`DBSIZE=6`，保留 3 个无 TTL key 和 `ttl:28`、`ttl:29`、`ttl:30`。
+- 结论：`volatile-lru` 只淘汰带 TTL 的 key；无 TTL key 即使更旧也不会被淘汰。`TTL=-1` 表示 key 存在但没有过期时间，不是错误。
+- `SHUTDOWN NOSAVE` 后 6381 已停止，6379 正常，临时目录已删除；本节不要重做。
+- 下一步：依次评估 `net.core.somaxconn`、`vm.overcommit_memory`、THP，再整理 Redis 巡检手册，之后进入 Docker/Compose。
+
+## 2026-09-15 Redis 内核参数调优完成
+
+- 正式 6379 调整前为 `tcp-backlog=511`、`net.core.somaxconn=128`、`vm.overcommit_memory=0`、THP `[always]`。
+- 已写入 `/etc/sysctl.d/99-redis.conf`：`net.core.somaxconn=1024`、`vm.overcommit_memory=1`；已创建 `/etc/tmpfiles.d/redis-disable-thp.conf` 持久化关闭 THP。
+- 复核结果：`somaxconn=1024`、`vm.overcommit_memory=1`、THP 为 `always madvise [never]`。
+- 重启 Redis 后 `PING=PONG`，监听队列 `Send-Q` 从 `128` 变为 `511`，证明 `tcp-backlog=511` 已真正生效。
+- 本节已完成，不要重做。下一步整理 Redis 巡检手册，再衔接 Docker/Compose。
+
+## 2026-09-15 Redis 巡检手册完成
+
+- 正式 6379 巡检通过：`active`、`enabled`、监听 `127.0.0.1:6379`、`Send-Q=511`、`PING=PONG`、`DBSIZE=3`。
+- 配置确认：128 MiB 上限、`noeviction`、AOF 开启、`appendfsync=everysec`、RDB 自动保存策略和数据目录均正常。
+- 持久化确认：RDB/AOF 状态均为 `ok`，无后台任务执行；`dump.rdb` 与 `appendonly.aof` 均存在，`LASTSAVE` 为 `2026-09-15 15:49:46 CST`。
+- 内存与日志确认：当前内存 793.88K、无淘汰、无拒绝连接，最近 24 小时 Redis 错误日志为空。
+- 本节已完成，不要重做。下一步进入 Docker/Compose。

@@ -4,7 +4,7 @@
 
 用途：让新线程或其他模型快速知道我已经实际敲过哪些命令、验证过哪些结果、排过哪些故障。
 
-最后更新：2026-07-11
+最后更新：2026-09-14
 
 说明：
 
@@ -2172,3 +2172,1188 @@ nothing to commit, working tree clean
 ```
 
 结论：Python 阶段脚本和学习记录已成功提交并推送到 GitHub。
+
+## 2026-09-12 Python 归档后记录提交
+
+以下内容于 2026-09-13 从本项目原始会话补登记，不是本次重新执行。
+
+用户实际执行：
+
+```powershell
+git add 项目记录/memory.md 项目记录/ops_command_history.md 项目记录/ops_handoff.md
+git diff --cached --check
+git commit -m "记录 Python 阶段提交结果"
+git push
+git status
+```
+
+结果：格式检查无输出；提交 `22b3b24`，3 个文件新增 42 行；推送显示 `d573677..22b3b24 main -> main`，随后工作区干净并与 `origin/main` 同步。Python 基础阶段已经完整归档，不需要重新完成旧提交。
+
+## 2026-09-12 Redis 安装前检查和安装
+
+来源：会话“继续”中当晚的用户终端输出，2026-09-13 补档。所有状态仅代表当时检查结果。
+
+- 最初误输入 `rpm _qa`，RPM 显示用法，不能用这一次结果判断安装状态。
+- 修正为 `rpm -qa | grep -i '^redis'` 后无输出。
+- `systemctl status redis --no-pager` 返回 `Unit redis.service could not be found.`。
+- `ss -lntp | grep ':6379'` 无输出。
+- `yum info redis` 显示 EPEL 提供版本 `3.2.12`、发布号 `2.el7`。
+
+随后实际安装：
+
+```bash
+sudo yum install -y redis
+```
+
+关键结果：
+
+```text
+Transaction test succeeded
+redis.x86_64 0:3.2.12-2.el7
+jemalloc.x86_64 0:3.6.0-1.el7
+完毕！
+```
+
+结论：Redis 及依赖已安装成功。安装前的“服务不存在”不是最新状态。
+
+## 2026-09-12 Redis 启动、监听、自启和应用响应
+
+安装后实际执行 `systemctl status redis`，服务已经存在，但为 `disabled`、`inactive (dead)`。服务单元位于 `/usr/lib/systemd/system/redis.service`，还显示 `limit.conf` 的 drop-in；尚未查看其内容。
+
+随后实际执行：
+
+```bash
+sudo systemctl start redis
+systemctl status redis --no-pager
+sudo ss -lntp | grep ':6379'
+redis-cli ping
+sudo systemctl enable redis
+systemctl status redis --no-pager
+systemctl is-active redis
+```
+
+关键结果：
+
+```text
+Active: active (running)
+LISTEN ... 127.0.0.1:6379 ... redis-server
+PONG
+Created symlink ... multi-user.target.wants/redis.service ...
+Loaded: loaded (...; enabled; vendor preset: disabled)
+active
+```
+
+结论：服务启动、回环地址监听、本机客户端响应、开机自启均已验证。`systemctl is-enabled redis` 仅曾被布置，未收到这条命令的输出；自启依据实际 `status` 中的 `enabled` 判断。没有验证重启后的启动或数据恢复。
+
+## 2026-09-12 Redis String 读写删除
+
+| 用户实际执行 | 实际结果 |
+|---|---|
+| `redis-cli SET app:status healthy` | `OK` |
+| `redis-cli GET app:status` | `"healthy"` |
+| `redis-cli DEL app:status` | `(integer) 1` |
+| 再次 `redis-cli GET app:status` | `(nil)` |
+
+结论：基本写入、读取、删除及删除后复查完成。
+
+## 2026-09-12 Redis 自动过期
+
+| 用户实际执行 | 实际结果 |
+|---|---|
+| `redis-cli SET app:cache "temporary-data" EX 30` | `OK` |
+| `redis-cli TTL app:cache` | `(integer) 16` |
+| 随后 `redis-cli GET app:cache` | `(nil)` |
+
+结论：设置 30 秒过期、读取剩余秒数及过期后取不到数据均已验证。`TTL` 返回 `-1` / `-2` 的含义只完成讲解，未单独验证。
+
+## 2026-09-12 Redis 计数器和清理
+
+| 用户实际执行 | 实际结果 |
+|---|---|
+| `redis-cli SET page:views 0` | `OK` |
+| `redis-cli INCR page:views` | `(integer) 1` |
+| `redis-cli GET page:views` | `"1"` |
+| 后续 `redis-cli INCRBY page:views 5` | `(integer) 7` |
+| `redis-cli DECR page:views` | `(integer) 6` |
+| `redis-cli GET page:views` | `"6"` |
+| `redis-cli DEL page:views` | `(integer) 1` |
+| 再次 `redis-cli GET page:views` | `(nil)` |
+
+结论：以实际的 `7 → 6` 为准，不用早先值 `1` 推导出未发生的结果；测试计数器已删除。未贴出的操作不记为已执行。
+
+## 2026-09-12 Redis Hash 与准确停点
+
+最后实际执行（北京时间约 20:53）：
+
+```bash
+redis-cli HSET server:centos100 ip 192.168.6.100
+redis-cli HSET server:centos100 role all-in-one
+redis-cli HGETALL server:centos100
+```
+
+两个 `HSET` 均返回 `(integer) 1`，`HGETALL` 实际显示字段 `ip` / `role`，值为 `192.168.6.100` / `all-in-one`。
+
+随后仅讲解并布置 `HGET server:centos100 ip` 和 `HDEL server:centos100 role`，没有收到执行输出。下一次从这两条接续，再用 `HGETALL` 核对字段；不能把预期输出记成已经完成。
+
+## 2026-09-13 历史会话核对补档
+
+- 按项目目录筛选并核对 16 条历史交互会话，包括归档与同一会话的恢复记录；没有使用其他项目记忆。
+- 发现本地笔记停在 Python，而 9 月 12 日晚已继续 Redis；已补齐本文件的实际命令、Redis 模块笔记、当前交接和首页。
+- 本次未连接虚拟机、未执行 Redis 命令、未修改业务脚本，也未提交或推送 Git。
+
+## 2026-09-13 Redis Hash 单字段读取、删除与拼写纠错
+
+以下根据用户本次回传的 CentOS 终端输出记录，不是助手代为执行：
+
+| 用户实际执行 | 实际结果 |
+|---|---|
+| `redis-cli HGET server:centos100 ip` | 返回 IP 字符串 `192.168.6.100` |
+| `redis-cli HGET server:centos100 role` | 返回角色字符串 `all-in-one` |
+| `redis-cli HGETALL server:centos100` | 显示 `ip=192.168.6.100`、`role=all-in-one` 两个字段与值 |
+| `redis-cli HDET server:centos100 role` | `(error) ERR unknown command 'HDET'` |
+| `redis-cli HDEL server:centos100 role` | `(integer) 1` |
+| 再次 `redis-cli HGETALL server:centos100` | 仅剩 `ip=192.168.6.100` |
+
+结论：`HGET` 单字段读取成功；`HDET` 是拼写错误，此次调用被拒绝、没有删除字段。改为 `HDEL` 后实际删除了 1 个字段，后续 `HGETALL` 确认 `role` 已删除、`ip` 保留，整个 Hash 键仍存在。Hash 单字段读取和删除已完成验证；本轮没有新的服务状态、监听或持久化测试结果。
+
+## 2026-09-13 Redis 键与字段存在性验证
+
+用户实际执行并回传：
+
+| 用户实际执行 | 实际结果 |
+|---|---|
+| `redis-cli EXISTS server:centos100` | `(integer) 1` |
+| `redis-cli HEXISTS server:centos100 role` | `(integer) 0` |
+
+结论：整个 `server:centos100` 键仍存在，Hash 中的 `role` 字段不存在，与之前删除 `role` 后的结果一致。这里的 `0` 表示字段不存在，不是命令执行失败；Redis 返回的整数结果与 Shell 的 `$?` 退出码是不同概念。本次没有重新读取 `ip` 值，也没有进行服务配置或持久化测试。
+
+## 2026-09-13 Redis 键类型与 Hash 字段数量验证
+
+用户实际执行并回传：
+
+| 用户实际执行 | 实际结果 |
+|---|---|
+| `redis-cli TYPE server:centos100` | `hash` |
+| `redis-cli HLEN server:centos100` | `(integer) 1` |
+
+结论：该键的数据类型为 Hash，包含 1 个字段，与此前 `HGETALL` 仅显示 `ip` 的结果一致。`HLEN` 统计字段个数，不是字符串字符数，也不是数据库键总数；本次没有重新读取字段值。类型与字段数量检查已经完成验证。
+
+## 2026-09-13 Redis List 基础小节统一记录
+
+根据用户本小节连续回传的实际输出，在小节完成后统一整理，未由助手代为执行：
+
+| 用户实际执行（按顺序） | 实际结果 |
+|---|---|
+| `redis-cli RPUSH practice:checks nginx mariadb` | `(integer) 2` |
+| `redis-cli LRANGE practice:checks 0 -1` | 依次显示 `nginx`、`mariadb` |
+| `redis-cli LPOP practice:checks` | 返回字符串 `nginx` |
+| `redis-cli LRANGE practice:checks 0 -1` | 仅显示 `mariadb` |
+| `redis-cli LLEN practice:checks` | `(integer) 1` |
+| `redis-cli LPOP practice:checks` | 返回字符串 `mariadb` |
+| `redis-cli LLEN practice:checks` | `(integer) 0` |
+| `redis-cli EXISTS practice:checks` | `(integer) 0` |
+
+结论：右端追加、范围查看、左端取出并删除、元素数量及取空后键不存在均已验证。先加入的 `nginx` 先被取出，完成 FIFO 演示；最后一个元素 `mariadb` 被取出后，列表键自动消失，没有额外执行 `DEL`。这些操作只修改练习列表，不实际执行服务巡检；本小节没有重复追加、阻塞消费或真实任务执行的验证结果。
+
+## 2026-09-13 Redis Set 基础小节统一记录
+
+以下依据用户在小节中回传的实际输出统一整理，未由助手代为执行：
+
+| 用户实际执行（按顺序） | 实际结果 |
+|---|---|
+| `redis-cli SADD practice:services nginx mariadb nginx` | `(integer) 2` |
+| `redis-cli SMEMBERS practice:services` | 显示 `mariadb`、`nginx`，重复名称只保留一份 |
+| `redis-cli SCARD practice:services` | `(integer) 2` |
+| `redis-cli SISMEMBER practice:services nginx` | `(integer) 1` |
+| `redis-cli SISMEMBER practice:services redis` | `(integer) 0` |
+| `redis-cli SREM practice:services nginx` | `(integer) 1` |
+| `redis-cli SISMEMBER practice:services nginx` | `(integer) 0` |
+| `redis-cli SMEMBERS practice:services` | 仅显示 `mariadb` |
+| `redis-cli SREM practice:services mariadb` | `(integer) 1` |
+| `redis-cli SMEMBERS practice:services` | `(empty list or set)` |
+| `redis-cli EXISTS practice:services` | `(integer) 0` |
+
+结论：Set 的添加、去重、查看、成员总数、存在性判断、按值删除及删除最后成员后的键消失均已验证。取空后用户实际回传的是 `SMEMBERS` 的空结果与 `EXISTS=0`，没有取空后的 `SCARD` 输出，不补记 `SCARD=0`。这里仅操作服务名称数据，没有启动、停止或巡检真实服务，也没有额外执行 `DEL`。
+
+## 2026-09-13 Redis ZSet 基础小节统一记录
+
+以下依据用户在本小节连续回传的实际输出统一整理，未由助手代为执行；范围查询结果按“成员 / 分数”简写，保留实际顺序：
+
+| 用户实际执行（按顺序） | 实际结果 |
+|---|---|
+| `redis-cli ZADD practice:priority 20 nginx 10 mariadb 30 redis` | `(integer) 3` |
+| `redis-cli ZRANGE practice:priority 0 -1 WITHSCORES` | `mariadb / 10`、`nginx / 20`、`redis / 30` |
+| `redis-cli ZADD practice:priority 5 nginx` | `(integer) 0` |
+| `redis-cli ZSCORE practice:priority nginx` | `"5"` |
+| `redis-cli ZRANGE practice:priority 0 -1 WITHSCORES` | `nginx / 5`、`mariadb / 10`、`redis / 30` |
+| `redis-cli ZCARD practice:priority` | `(integer) 3` |
+| `redis-cli ZREVRANGE practice:priority 0 -1 WITHSCORES` | `redis / 30`、`mariadb / 10`、`nginx / 5` |
+| `redis-cli ZREM practice:priority nginx mariadb redis` | `(integer) 3` |
+| `redis-cli ZCARD practice:priority` | `(integer) 0` |
+| `redis-cli EXISTS practice:priority` | `(integer) 0` |
+
+结论：新增成员、更新分数、升序/降序读取、查询单个分数与成员数、多成员删除及删空后键消失均已验证。更新已有的 `nginx` 时，`ZADD=0` 表示没有新增成员，`ZSCORE="5"` 和新的排序确认更新成功；`ZCARD` 仍为 `3`。最后 `ZREM=3` 表示删除三个成员，随后 `ZCARD=0`、`EXISTS=0` 确认无剩余成员且练习键已自动消失，无需再次清理。这里只操作名称和分数，没有修改真实服务优先级或执行 `DEL`；Redis 配置、日志与持久化仍未实操。
+
+## 2026-09-13 Redis 配置、日志与本机监听小节统一记录
+
+以下依据用户本小节回传的实际结果整理，助手未连接虚拟机代为执行。命令按标准写法列出；同一段配置和日志的重复粘贴只归档一次，不据此推断重新执行过，也不把消息复制转义当成新故障。
+
+| 用户回传的命令（按首次出现顺序） | 实际结果 |
+|---|---|
+| `systemctl cat redis --no-pager` | 显示 `/usr/lib/systemd/system/redis.service` 和 `/etc/systemd/system/redis.service.d/limit.conf`；`ExecStart=/usr/bin/redis-server /etc/redis.conf --supervised systemd` |
+| `redis-cli INFO server \| grep '^config_file:'` | `config_file:/etc/redis.conf` |
+| `redis-cli CONFIG GET bind` | `bind` / `127.0.0.1` |
+| `redis-cli CONFIG GET port` | `port` / `6379` |
+| `redis-cli CONFIG GET logfile` | `logfile` / `/var/log/redis/redis.log` |
+| `sudo grep -nE '^[[:space:]]*(bind\|port\|logfile)[[:space:]]' /etc/redis.conf` | `61:bind 127.0.0.1`、`84:port 6379`、`163:logfile /var/log/redis/redis.log` |
+| `sudo tail -n 20 /var/log/redis/redis.log` | 四轮 RDB 后台保存记录，均包含 `DB saved on disk` 与 `Background saving terminated with success` |
+| `redis-cli CONFIG GET protected-mode` | `protected-mode` / `yes` |
+| `sudo ss -lntp \| grep ':6379'` | `LISTEN`，本地地址 `127.0.0.1:6379`，对端列 `*:*`，进程 `redis-server`，`pid=1207`，`fd=4`，队列列为 `0` / `128` |
+
+- 运行中的配置文件路径与服务启动命令一致；本次核对的三个配置项在运行值和磁盘文件中一致。服务单元还声明 `Type=notify`、`User=redis`、`Group=redis` 和 `LimitNOFILE=10240`，没有另查进程实际身份或资源限制。
+- 日志四轮时间分别为 9 月 13 日 `13:32:16`、`13:57:37`、`14:12:38`、`14:27:39`；后台子进程号依次为 `5485`、`5735`、`5934`、`6082`，写时复制内存报告依次为 `4 MB`、`4 MB`、`2 MB`、`2 MB`。每轮由 `1 changes in 900 seconds. Saving...` 开始并成功结束；这些是日志记录，不是新做了四次手动保存实验。
+- 读取配置时 sudo 认证曾两次未通过，随后成功；这是认证重试现象，不是 Redis 报错，未修改密码或 sudo 配置，不记录任何凭据。
+- 最新 `ss` 已重新验证本机回环监听；对端列 `*:*` 不等于监听所有网卡，`0/128` 不是客户端数，`fd=4` 不是四个连接。保护模式已开启，但不能代替绑定限制、认证与防火墙。
+- 本节没有修改配置、重启服务、开放端口或重新检查 systemd active/enabled、`PING`。只观察到 RDB 保存成功，完整保存规则、快照目录与文件名、AOF 状态、文件检查及重启恢复仍未验证；下一小节再继续。
+
+## 2026-09-13 Redis RDB 规则、文件与手动保存阶段记录
+
+用户明确要求记录到目前为止的学习，本次在 RDB 小节中途归档，不表示备份或恢复完成。以下按回传顺序整理；中断后再次贴出的相同 SET/GET/BGSAVE/INFO 输出只作为一次证据归档，不推断重复执行次数。助手未连接虚拟机执行操作。
+
+| 用户实际执行 | 实际结果 |
+|---|---|
+| `redis-cli CONFIG GET save` | `save` / `900 1 300 10 60 10000` |
+| `redis-cli CONFIG GET dir` | `dir` / `/var/lib/redis` |
+| `redis-cli CONFIG GET dbfilename` | `dbfilename` / `dump.rdb` |
+| `sudo ls -lh /var/lib/redis/dump.rdb` | 文件存在，权限 `-rw-r--r--.`，属主/属组 `redis/redis`，大小 `131` 字节，修改时间 `9月 13 14:27`；发生在下列手动保存之前 |
+| `redis-cli SET practice:rdb-check rdb-ok` | `OK` |
+| `redis-cli GRT practice:rdb-check` | `(error) ERR unknown command 'GRT'` |
+| `redis-cli GET practice:rdb-check` | `"rdb-ok"` |
+| `redis-cli BGSAVE` | `Background saving started` |
+| `redis-cli INFO persistence` | 返回以下持久化状态 |
+
+```text
+loading:0
+rdb_changes_since_last_save:0
+rdb_bgsave_in_progress:0
+rdb_last_save_time:1789292105
+rdb_last_bgsave_status:ok
+rdb_last_bgsave_time_sec:0
+rdb_current_bgsave_time_sec:-1
+aof_enabled:0
+aof_rewrite_in_progress:0
+aof_rewrite_scheduled:0
+aof_last_rewrite_time_sec:-1
+aof_current_rewrite_time_sec:-1
+aof_last_bgrewrite_status:ok
+aof_last_write_status:ok
+```
+
+结论：三组自动保存规则已查明，每组内部是时间和变更次数同时满足，三组之间为“或”；快照路径为 `/var/lib/redis/dump.rdb`。`GRT` 拼写错误已改成 GET，保存前读到 `rdb-ok`。结合 BGSAVE 启动回复与随后的 `in_progress=0`、`status=ok`、`changes=0`，手动后台保存已完成且成功；当前 `aof_enabled=0`。文件的 131 字节大小是保存前基线，保存后尚未复查大小/修改时间，也未重启恢复或清理练习键。
+
+### 快照复制备份（2026-09-13 历史会话复核补档）
+
+```bash
+sudo cp -anv /var/lib/redis/dump.rdb "/var/lib/redis/dump.rdb.before-restart-$(date +%Y%m%d-%H%M%S)"
+```
+
+此前中途归档尚未收到复制结果；本次按项目目录核对历史会话，找到用户于 2026-09-13 20:11（会话北京时间）回传的真实复制输出：
+
+```text
+"/var/lib/redis/dump.rdb" -> "/var/lib/redis/dump.rdb.before-restart-20260913-183303"
+```
+
+结论：快照复制已完成，目标文件名已明确。文件名中的时间来自 CentOS 的 date，不能用它代替会话回传时间；当时尚未收到文件大小核对或重启后的 GET，后续验证见下一小节。此次只补记历史证据，助手没有执行新的虚拟机命令。
+
+用户随后贴出的是下面的命令文本，而非执行结果；恢复记录中的重复文本不算多次执行，也不证明内容一致：
+
+```bash
+sudo cmp -s /var/lib/redis/dump.rdb /var/lib/redis/dump.rdb.before-restart-20260913-183303 && echo "backup identical" || echo "backup differs"
+```
+
+当时安排的下一步是核对已复制快照的大小、属性和内容，不重做 cp、SET/BGSAVE。比较需要区分 cmp 的 0（一致）、1（不同）、2（出错），不把权限或路径错误归为内容不同；该核对及后续重启现已完成，实际回传统一归档如下。
+
+cp/scp 的用途、源文件默认保留、参数不能照搬及时间文件名已讲解。真实快照复制已有证据，但早先用于语法演示的示例文件复制与 scp 上传仍未实操，不加入已执行清单。
+
+## 2026-09-14 统一归档：RDB 备份核对、正常重启与加载验证
+
+以下来自用户在本任务中的连续实操回传；重启及启动日志的时间明确为 `2026-09-13 23:45:36 CST`，归档日期不代表重新执行。助手只整理记录，没有连接虚拟机代做操作。
+
+### 1. 重启前的备份文件与内容核对
+
+| 用户实际执行（按顺序） | 实际结果 |
+|---|---|
+| `sudo ls -lh /var/lib/redis/dump.rdb /var/lib/redis/dump.rdb.before-restart-20260913-183303` | 两个文件均为 `-rw-r--r--.`、属主/属组 `redis/redis`、158 字节、修改时间 `9月 13 17:35` |
+| `sudo cmp /var/lib/redis/dump.rdb /var/lib/redis/dump.rdb.before-restart-20260913-183303` | 没有输出 |
+| 紧接着执行 `echo $?` | `0` |
+
+结论：当时源文件与备份逐字节一致，不只是大小相同。`cp -a` 保留源文件修改时间，17:35 不是备份创建时间。158 字节是重启前结果；重启后没有重新查看大小或比较内容，不能当作持续不变的状态。
+
+另外讲解了原先单行命令的两个局限：`&& echo ... || echo ...` 会把内容不同与命令报错混淆；整行执行后再查看 `$?`，通常得到最后一个 echo 的退出码，而不是 cmp 的退出码。再次单独贴出的旧命令不计为新的执行证据。
+
+### 2. 正常重启、服务状态与数据读回
+
+| 用户实际执行（按顺序） | 实际结果 |
+|---|---|
+| `sudo systemctl restart redis` | 未显示错误，随后继续用服务状态和数据读取验证 |
+| `sudo systemctl status redis --no-pager -l` | `active (running)`，启动于 `2026-09-13 23:45:36 CST`；主进程 `3047 (redis-server)`；ExecStop 为 `status=0/SUCCESS`；开机自启为 enabled |
+| `redis-cli GET practice:rdb-check` | `"rdb-ok"` |
+
+重启后没有重新执行 SET，因此读到的是原练习值。ExecStop 成功指旧服务的停止命令正常完成；vendor preset 的 disabled 只是默认策略，与当前 enabled 不矛盾。重启的是 Redis 服务，不是 CentOS；没有回传重启后重新运行 ss 或 PING 的结果。
+
+### 3. 重启后持久化状态和启动日志
+
+用户实际执行：
+
+```bash
+redis-cli INFO persistence
+sudo tail -n 20 /var/log/redis/redis.log
+```
+
+INFO 中的关键原始字段：
+
+```text
+loading:0
+rdb_changes_since_last_save:0
+rdb_bgsave_in_progress:0
+rdb_last_save_time:1789314336
+rdb_last_bgsave_status:ok
+rdb_last_bgsave_time_sec:-1
+rdb_current_bgsave_time_sec:-1
+aof_enabled:0
+aof_rewrite_in_progress:0
+aof_rewrite_scheduled:0
+aof_last_rewrite_time_sec:-1
+aof_current_rewrite_time_sec:-1
+aof_last_bgrewrite_status:ok
+aof_last_write_status:ok
+```
+
+当前无加载或后台保存任务，AOF 未启用。新进程的 RDB 上次耗时为 -1 不表示失败；不能只凭 status=ok 或 last_save_time 更新声称新进程做过 BGSAVE。AOF 的 ok 状态也不证明执行过 AOF 实验。
+
+本次启动关键日志：
+
+```text
+3047:M 13 Sep 23:45:36.212 # Server started, Redis version 3.2.12
+3047:M 13 Sep 23:45:36.212 * DB loaded from disk: 0.000 seconds
+3047:M 13 Sep 23:45:36.212 * The server is now ready to accept connections on port 6379
+```
+
+三条 WARNING 同时提示：Redis 请求 backlog=511，而内核 somaxconn=128；overcommit_memory=0；THP 开启。分别涉及连接排队容量、低内存时后台保存的 fork 风险、延迟及内存开销，不是这次启动或加载失败。这里只读取日志，尚未直接读取相应内核文件、修改参数或配置开机持久化。
+
+### 4. 本段完成范围与下一步
+
+结合 AOF 关闭、磁盘加载日志和重启后的 GET，确认 RDB 正常启动加载与练习值读回通过。正常停止可能再次保存 RDB；没有将备份复制回正式位置，不能声称指定备份回灌、断电恢复或全部键完整性已验证。备份和练习键仍保留。
+
+本次按小节统一归档，不再逐条命令改文件。下一步学习 AOF 概念并只读查询 appendonly、appendfilename、appendfsync，尚无这三项 CONFIG GET 的执行输出；之后再安排启用、恢复和内存/性能警告核验。没有启用 AOF、改内核参数、清理数据、提交或推送 Git。
+
+## 2026-09-14 Redis AOF 在线启用与重启恢复验证
+
+本小节在 RDB 基础验证之后完成。用户先只读查询 AOF 配置，再在线启用、解决配置持久化权限问题，最后通过重启后的数据读取和启动日志确认 AOF 加载。
+
+### 1. 配置查询与启用前检查
+
+```bash
+redis-cli CONFIG GET appendonly
+redis-cli CONFIG GET appendfilename
+redis-cli CONFIG GET appendfsync
+sudo grep -n 'appendfilename' /etc/redis.conf
+sudo ls -lh /var/lib/redis/appendonly.aof
+df -h /var/lib/redis
+```
+
+关键结果：
+
+```text
+appendonly = no
+appendfilename CONFIG GET 返回 (empty list or set)
+appendfsync = everysec
+/etc/redis.conf 第 597 行：appendfilename "appendonly.aof"
+/var/lib/redis/appendonly.aof：文件不存在
+根分区：17G 总容量，5.8G 已用，12G 可用，34% 使用率
+```
+
+配置文件备份：
+
+```bash
+sudo cp -anv /etc/redis.conf "/etc/redis.conf.before-aof-$(date +%Y%m%d-%H%M%S)"
+```
+
+实际输出：
+
+```text
+"/etc/redis.conf" -> "/etc/redis.conf.before-aof-20260914-094538"
+```
+
+### 2. 在线启用与文件生成
+
+```bash
+redis-cli CONFIG SET appendonly yes
+```
+
+返回 `OK`。随后：
+
+```text
+aof_enabled:1
+aof_rewrite_in_progress:0
+aof_rewrite_scheduled:0
+aof_last_rewrite_time_sec:0
+aof_current_rewrite_time_sec:-1
+aof_last_bgrewrite_status:ok
+aof_last_write_status:ok
+```
+
+`sudo ls -lh /var/lib/redis/appendonly.aof` 确认文件生成，大小 139 字节，属主 `redis:redis`。
+
+### 3. CONFIG REWRITE 权限失败与手动持久化
+
+```bash
+redis-cli CONFIG REWRITE
+```
+
+返回：
+
+```text
+(error) ERR Rewriting config file: Permission denied
+```
+
+进一步核对：
+
+```text
+/etc/redis.conf：-rw-r-----. 1 redis root ...
+/etc：drwxr-xr-x. ... root root
+redis-server：USER=redis，GROUP=redis
+```
+
+结论：Redis 用户虽是配置文件属主，但无权在 `/etc` 目录中创建 `CONFIG REWRITE` 需要的临时文件；没有使用 `chmod` 或修改目录属主。管理员手动修改有效配置行：
+
+```bash
+sudo sed -i 's/^appendonly no$/appendonly yes/' /etc/redis.conf
+sudo grep -nE '^[[:space:]]*appendonly[[:space:]]+' /etc/redis.conf
+```
+
+实际确认：
+
+```text
+593:appendonly yes
+```
+
+### 4. 写入测试与重启恢复
+
+```bash
+redis-cli SET practice:aof-check aof-ok
+redis-cli INFO persistence | grep -E '^(aof_enabled|aof_last_write_status|aof_rewrite_in_progress|aof_last_bgrewrite_status):'
+```
+
+结果：`SET` 返回 `OK`；`aof_enabled:1`、`aof_rewrite_in_progress:0`、`aof_last_bgrewrite_status:ok`、`aof_last_write_status:ok`。
+
+重启后未重新 SET，`redis-cli GET practice:aof-check` 返回 `"aof-ok"`。启动日志显示：
+
+```text
+5519:M 14 Sep 11:44:30.922 * DB loaded from append only file: 0.000 seconds
+5519:M 14 Sep 11:44:30.922 * The server is now ready to accept connections on port 6379
+```
+
+结论：AOF 已在线启用，配置已写入 `/etc/redis.conf`，AOF 文件已生成，写入状态正常，Redis 重启后成功从 AOF 加载练习键。三条启动 WARNING（backlog/somaxconn、`overcommit_memory`、THP）仍待只读核验，未修改内核参数。AOF 练习键 `practice:aof-check` 暂不清理。
+
+## 2026-09-14 Redis 指定 RDB 备份隔离回灌验证
+
+为不影响正式 `6379` 实例和现有 AOF，使用临时目录与端口验证指定的历史 RDB 备份。用户实际执行：
+
+```bash
+sudo mkdir /var/lib/redis-rdb-restore-20260914
+sudo cp -av /var/lib/redis/dump.rdb.before-restart-20260913-183303 /var/lib/redis-rdb-restore-20260914/dump.rdb
+sudo chown redis:redis /var/lib/redis-rdb-restore-20260914 /var/lib/redis-rdb-restore-20260914/dump.rdb
+```
+
+第一次 `sudo` 密码输入错误，第二次认证成功；目录创建、文件复制和属主设置均完成。未删除正式 `/var/lib/redis/dump.rdb`，未停止 `redis.service`。
+
+启动隔离实例：
+
+```bash
+sudo -u redis redis-server \
+  --bind 127.0.0.1 \
+  --port 6380 \
+  --dir /var/lib/redis-rdb-restore-20260914 \
+  --dbfilename dump.rdb \
+  --appendonly no \
+  --save "" \
+  --daemonize yes \
+  --pidfile /var/lib/redis-rdb-restore-20260914/redis.pid \
+  --logfile /var/lib/redis-rdb-restore-20260914/redis.log \
+  --supervised no
+```
+
+验证命令及实际结果：
+
+```bash
+redis-cli -p 6380 INFO keyspace
+```
+
+返回 `db0:keys=2,expires=0,avg_ttl=0`。
+
+```bash
+redis-cli -p 6380 KEYS '*'
+```
+
+列出：`server:centos100`、`practice:rdb-check`。
+
+```bash
+sudo tail -n 10 /var/lib/redis-rdb-restore-20260914/redis.log
+```
+
+日志显示 `DB loaded from disk: 0.000 seconds`，随后显示实例已在端口 `6380` 接受连接。结合此前 `redis-check-rdb` 的 `Checksum OK`、`RDB looks OK!`、`2 keys read`，确认指定 RDB 已被 Redis 实际加载，回灌验证完成。
+
+### 具体键值与关闭验证（本任务补充）
+
+| 用户实际执行 | 实际结果 |
+|---|---|
+| `redis-cli -p 6380 GET practice:rdb-check` | `"rdb-ok"` |
+| `redis-cli -p 6380 HGETALL server:centos100` | 字段 `ip`，值 `192.168.6.100`，只有这一组字段和值 |
+| `redis-cli -p 6380 SHUTDOWN NOSAVE` | 无文字输出，返回 Shell 提示符 |
+| `redis-cli -p 6380 PING` | `Could not connect to Redis at 127.0.0.1:6380: Connection refused` |
+| `redis-cli -p 6379 PING` | `PONG` |
+
+指定备份中这两个练习键的具体内容已读回。结合关闭命令和后续连接被拒绝，确认临时实例已停止；正式实例的 PING 仍正常。后续临时目录核对与清理见下一小节；本节未修改内核参数；原始备份不作为清理目标。启动日志中的 backlog/somaxconn、`overcommit_memory`、THP WARNING 仍待只读核验。
+
+## 2026-09-14 临时 RDB 恢复目录核对与安全清理
+
+| 用户实际执行 | 实际结果 |
+|---|---|
+| `sudo ls -lah /var/lib/redis-rdb-restore-20260914` | 临时目录内只有 `dump.rdb`（158 字节）和 `redis.log`（2.8K），属主与属组均为 `redis:redis` |
+| `sudo ls -lh /var/lib/redis/dump.rdb.before-restart-20260913-183303` | 原始备份存在，158 字节，属主与属组为 `redis:redis` |
+| `sudo rm -i -- /var/lib/redis-rdb-restore-20260914/dump.rdb /var/lib/redis-rdb-restore-20260914/redis.log` | 分别询问删除两个普通文件，用户均输入 `y` |
+| `sudo rmdir /var/lib/redis-rdb-restore-20260914` | 无报错，返回 Shell 提示符 |
+| `sudo ls -ld /var/lib/redis-rdb-restore-20260914` | 提示“没有那个文件或目录” |
+
+临时文件与空目录清理已验证完成，最后 ls 提示不存在是预期检查结果，不是清理失败。删除目标只包含实验副本、实验日志和临时目录；原始备份在清理前已确认存在，正式数据目录和 AOF 不在删除范围。本轮没有再次读取原始备份内容或重新执行正式实例 PING，也没有修改内核参数。
+
+## 2026-09-14 Redis 启动警告对应内核参数只读核验
+
+用户实际执行：
+
+```bash
+sysctl net.core.somaxconn vm.overcommit_memory
+cat /sys/kernel/mm/transparent_hugepage/enabled
+```
+
+实际输出依次为：
+
+```text
+net.core.somaxconn = 128
+vm.overcommit_memory = 0
+[always] madvise never
+```
+
+用户只读实测 `net.core.somaxconn=128`、`vm.overcommit_memory=0`，THP 输出 `[always] madvise never`，当前生效选项为 `always`。三项与此前启动警告一致，但不能据此认定当前内存不足或已出现性能故障。 仅查询内核参数和读取状态文件，没有执行赋值、写配置、关闭 THP 或重启服务。后续内存查询与上限修改的实际输出见下一小节。
+
+## 2026-09-14 整机与 Redis 内存基线、128 MiB 运行时上限
+
+用户先实际执行：
+
+```bash
+free -m
+redis-cli -p 6379 INFO memory
+```
+
+| 调整前指标 | 用户实际输出 |
+|---|---|
+| 系统内存（MiB） | total=1980、used=936、free=247、shared=15、buff/cache=796、available=866 |
+| Swap（MiB） | total=2047、used=0、free=2047 |
+| Redis used_memory | 812936 字节，793.88K |
+| Redis used_memory_rss | 6045696 字节，5.77M |
+| Redis used_memory_peak | 812936 字节，793.88K |
+| total_system_memory | 2076565504 字节，1.93G，指整机总内存 |
+| 调整前 maxmemory / policy | 0 / noeviction |
+| mem_fragmentation_ratio / allocator | 7.44 / jemalloc-3.6.0 |
+
+随后实际执行：
+
+```bash
+redis-cli -p 6379 CONFIG SET maxmemory 134217728
+redis-cli -p 6379 CONFIG GET maxmemory
+```
+
+输出依次为：
+
+```text
+OK
+1) "maxmemory"
+2) "134217728"
+```
+
+已确认运行时上限为 128 MiB。此次只更改 maxmemory，没有写配置文件、CONFIG REWRITE、服务重启或内核参数修改，也没有超限写入测试。后续磁盘配置核对与写入结果见下一小节；INFO memory 的统计来自修改前，未声称改变上限后 RSS 或碎片率有所下降。
+
+## 2026-09-14 maxmemory 配置文件备份与写入核对
+
+| 用户实际回传的命令 | 实际结果 |
+|---|---|
+| `sudo grep -n 'maxmemory' /etc/redis.conf` | 第 537 行为 maxmemory 注释示例，第 560 行 maxmemory-policy、第 571 行 maxmemory-samples 也为注释 |
+| `sudo cp -av /etc/redis.conf "/etc/redis.conf.before-maxmemory-$(date +%Y%m%d-%H%M%S)"` | `"/etc/redis.conf" -> "/etc/redis.conf.before-maxmemory-20260914-165752"` |
+| `sudo grep -n '^maxmemory ' /etc/redis.conf` | `537:maxmemory 134217728` |
+
+配置文件中的 maxmemory 已确认是非注释的 134217728，文件写入结果通过。本任务提供了 sed 修改方法，但用户未单独回传该编辑命令原文，因此不把它另记为已执行命令；以编辑前后 grep 结果记录文件状态变化。本段只记录文件写入，后续服务重启与运行值读回见下一小节。未执行 CONFIG REWRITE、回滚或内核参数调整。
+
+## 2026-09-14 17:10 Redis 128 MiB 上限服务重启验收
+
+| 用户实际执行 | 实际结果 |
+|---|---|
+| `sudo systemctl restart redis` | 未报错，随后用状态与运行值验证 |
+| `sudo systemctl status redis --no-pager -l` | `active (running)`，启动于 `2026-09-14 17:10:21 CST`，Main PID=9261，ExecStop=`0/SUCCESS`，enabled |
+| `redis-cli -p 6379 CONFIG GET maxmemory` | 返回 `maxmemory` 和 `134217728` |
+
+重启与查询之间未重新执行 CONFIG SET，结合新进程状态和直接读回结果，确认启动后的 maxmemory 仍为 128 MiB，上限的文件配置与服务重启加载验收通过。状态中的 vendor preset disabled 不推翻当前 enabled；Drop-In 仅显示 `/etc/systemd/system/redis.service.d/limit.conf`，未读取内容或判断它限制什么。
+
+本小节先完成服务状态与上限读回；随后练习键和策略的实际复核见下一小节。仅凭 active 状态和 maxmemory 返回值，不能推断数据完整性、AOF 加载来源或整机重启已经验证；未执行回滚或内核参数调整。
+
+## 2026-09-14 重启后练习键与 noeviction 策略复核
+
+| 用户实际执行 | 实际结果 |
+|---|---|
+| `redis-cli -p 6379 MGET practice:rdb-check practice:aof-check` | 依次返回 `"rdb-ok"`、`"aof-ok"` |
+| `redis-cli -p 6379 CONFIG GET maxmemory-policy` | 返回 `"maxmemory-policy"` 和 `"noeviction"` |
+
+本轮服务重启后的两个指定字符串键已读回，当前策略重新确认为 noeviction；结合此前 maxmemory=134217728 的读回，上限、数据抽查与策略复核完成。没有新读回 Hash、核对 AOF 加载日志、验证全部键完整性或执行超限写入。新隔离内存实验尚未启动，端口检查也尚无执行回传。
+
+## 2026-09-14 Redis 6381 隔离 noeviction 超限演练与关闭
+
+| 用户实际执行 | 实际结果 |
+|---|---|
+| `sudo ss -lntp 'sport = :6381'` | 无监听输出，确认拟用端口空闲 |
+| `sudo -u redis redis-server --bind 127.0.0.1 --port 6381 --dir /var/lib/redis-noeviction-20260914 --appendonly no --save "" --maxmemory 1048576 --maxmemory-policy noeviction --daemonize yes --pidfile /var/lib/redis-noeviction-20260914/redis.pid --logfile /var/lib/redis-noeviction-20260914/redis.log --supervised no` | 命令返回提示符，实例随后可响应 |
+| `redis-cli -p 6381 PING` | `PONG` |
+| `redis-cli -p 6381 CONFIG GET maxmemory` | 返回 `maxmemory` 和 `1048576` |
+| `redis-cli -p 6381 CONFIG GET maxmemory-policy` | 返回 `maxmemory-policy` 和 `noeviction` |
+| `redis-cli -p 6381 CONFIG GET appendonly` | 返回 `appendonly` 和 `no` |
+
+随后用户构造 65536 字节的 value，并循环尝试写入 `practice:noeviction:1` 至 `practice:noeviction:30`：
+
+```bash
+value=$(printf 'A%.0s' $(seq 1 65536))
+for i in $(seq 1 30); do
+  redis-cli -p 6381 SET "practice:noeviction:$i" "$value" || {
+    echo "FIRST_FAILED_INDEX=$i"
+    break
+  }
+done
+```
+
+前 6 次 `SET` 返回 `OK`，第 7 次开始连续返回 `OOM command not allowed when used memory > 'maxmemory'`。脚本没有输出 `FIRST_FAILED_INDEX`，原因是旧版 Redis 3.2 的 `redis-cli` 收到服务端错误时退出码可能仍为 0，`||` 分支未触发；不能依赖退出码判断业务失败。
+
+| 用户实际执行 | 实际结果 |
+|---|---|
+| `redis-cli -p 6381 INFO memory \| grep -E '^(used_memory:\|used_memory_human:\|maxmemory:\|maxmemory_human:\|maxmemory_policy:\|mem_fragmentation_ratio:)'` | `used_memory=923152`（901.52K）、`maxmemory=1048576`（1.00M）、策略 `noeviction`、碎片率 `5.71` |
+| `redis-cli -p 6381 DBSIZE` | `6` |
+| `redis-cli -p 6381 GET practice:noeviction` | `(nil)`；原因是 key 名少了编号，实际 key 为 `practice:noeviction:1` 等 |
+| `redis-cli -p 6381 STRLEN practice:noeviction:1` | `65536`，证明已有键仍可读 |
+| `redis-cli -p 6381 DEL practice:noeviction:1` | `1` |
+| `redis-cli -p 6381 SET practice:noeviction:after-del small` | `OK` |
+| `redis-cli -p 6381 GET practice:noeviction:after-del` | `"small"`，证明释放内存后写入恢复 |
+| `redis-cli -p 6381 SHUTDOWN NOSAVE` | 无输出；随后 6381 连接拒绝，确认实例关闭 |
+| `redis-cli -p 6381 PING` | `Could not connect to Redis at 127.0.0.1:6381: Connection refused` |
+| `redis-cli -p 6379 PING` | `PONG`，正式实例仍正常 |
+
+结论：noeviction 在内存不足时拒绝可能增加内存的写入，已有数据仍可读，删除数据释放空间后写入恢复。`used_memory=923152 < maxmemory=1048576` 与第 7 次 OOM 不矛盾，因为 INFO 是事后查询值，不是第 7 次写入瞬间的内存峰值。临时目录 `/var/lib/redis-noeviction-20260914` 已完成只读核验和最终清理。
+
+### 2026-09-15 noeviction 临时目录只读核验与最终清理
+
+| 用户实际执行 | 实际结果 |
+|---|---|
+| `sudo ls -la /var/lib/redis-noeviction-20260914` | 目录属主 `redis:redis`，仅包含 `redis.log`，无 `.`/`..` 之外的目录项 |
+| `sudo find /var/lib/redis-noeviction-20260914 -maxdepth 1 -type f -printf '%f %s bytes\n'` | 仅 `redis.log 2745 bytes` |
+| `redis-cli -p 6381 PING` | `Connection refused`，符合临时实例已停止的预期 |
+| `sudo rm -i /var/lib/redis-noeviction-20260914/redis.log` | 确认 `y` 后删除成功 |
+| `sudo rmdir /var/lib/redis-noeviction-20260914` | 删除空目录成功 |
+| `sudo ls -ld /var/lib/redis-noeviction-20260914` | 返回“没有那个文件或目录”，确认目录已不存在 |
+| `redis-cli -p 6381 PING` | `Connection refused`，临时实例仍处于关闭状态 |
+| `redis-cli -p 6379 PING` | `PONG`，正式实例仍正常 |
+
+结论：无 `dump.rdb` 和 `appendonly.aof`，说明本次 `--save ""` 与 `--appendonly no` 生效；无 `redis.pid` 说明正常退出后 pidfile 已清理；`redis.log` 是唯一遗留实验日志。最终清理后目录已不存在，6381 仍拒绝连接，6379 仍返回 `PONG`。noeviction 小节已完整收尾。
+
+## 2026-09-15 Redis 6381 隔离 allkeys-lru 演练与清理
+
+- `sudo ss -lntp 'sport = :6381'`：无监听，确认 6381 空闲。
+- `sudo install -d -o redis -g redis -m 700 /var/lib/redis-allkeys-lru-20260915`：创建 redis 属主的隔离实验目录。
+- 使用 `sudo -u redis redis-server` 启动 6381，配置 `127.0.0.1`、`maxmemory=1048576`、`maxmemory-policy=allkeys-lru`、`appendonly no`、`save ""`、daemon 模式和专用日志目录。
+- `redis-cli -p 6381 PING` 返回 `PONG`；`CONFIG GET maxmemory`、`CONFIG GET maxmemory-policy`、`CONFIG GET appendonly` 分别确认 `1048576`、`allkeys-lru`、`no`。
+- 循环写入 30 个 `practice:allkeys-lru:$i`，每个 value 为 65536 个 `A`，全部返回 `OK`。
+- `INFO memory` 显示 `used_memory=923568`、`maxmemory=1048576`、策略 `allkeys-lru`；`INFO stats` 显示 `evicted_keys=24`；`DBSIZE=6`。
+- `--scan --pattern 'practice:allkeys-lru:*' | sort -V` 显示保留 `:25` 至 `:30`；`EXISTS` 显示 `:1=0`、`:24=0`、`:25=1`、`:30=1`；`STRLEN :30=65536`。
+- `SHUTDOWN NOSAVE` 后 6381 拒绝连接，6379 返回 `PONG`；目录仅剩 `redis.log 2745 bytes`。
+- 用户用 `sudo rm -i` 删除日志、`sudo rmdir` 删除空目录，并确认目录不存在。
+- 结论：`allkeys-lru` 在内存不足时淘汰旧 key，新写入仍可成功；与 `noeviction` 内存不足时 OOM 拒写形成对比。
+
+### 本节实际命令
+
+```bash
+# 1. 检查 6381 是否空闲
+sudo ss -lntp 'sport = :6381'
+
+# 2. 创建隔离目录
+sudo install -d -o redis -g redis -m 700 /var/lib/redis-allkeys-lru-20260915
+
+# 3. 启动隔离实例
+sudo -u redis redis-server \
+  --bind 127.0.0.1 \
+  --port 6381 \
+  --dir /var/lib/redis-allkeys-lru-20260915 \
+  --appendonly no \
+  --save "" \
+  --maxmemory 1048576 \
+  --maxmemory-policy allkeys-lru \
+  --daemonize yes \
+  --pidfile /var/lib/redis-allkeys-lru-20260915/redis.pid \
+  --logfile /var/lib/redis-allkeys-lru-20260915/redis.log \
+  --supervised no
+
+# 4. 验证连通性和关键配置
+redis-cli -p 6381 PING
+redis-cli -p 6381 CONFIG GET maxmemory
+redis-cli -p 6381 CONFIG GET maxmemory-policy
+redis-cli -p 6381 CONFIG GET appendonly
+
+# 5. 生成 65536 字节测试 value
+value=$(printf 'A%.0s' $(seq 1 65536))
+
+# 6. 连续写入 30 个大 value，并显示每次结果
+for i in $(seq 1 30); do
+  result=$(redis-cli -p 6381 SET "practice:allkeys-lru:$i" "$value")
+  printf '%02d %s\n' "$i" "$result"
+done
+
+# 7. 查看内存、淘汰数量和最终 key 数
+redis-cli -p 6381 INFO memory | grep -E '^(used_memory:|used_memory_human:|maxmemory:|maxmemory_human:|maxmemory_policy:)'
+redis-cli -p 6381 INFO stats | grep -E '^(evicted_keys:)'
+redis-cli -p 6381 DBSIZE
+
+# 8. 查看保留下来的 key
+redis-cli -p 6381 --scan --pattern 'practice:allkeys-lru:*' | sort -V
+
+# 9. 验证旧 key 被淘汰、新 key 保留
+for i in 1 24 25 30; do
+  result=$(redis-cli -p 6381 EXISTS "practice:allkeys-lru:$i")
+  printf 'practice:allkeys-lru:%s EXISTS=%s\n' "$i" "$result"
+done
+
+# 10. 验证保留 key 的 value 长度
+redis-cli -p 6381 STRLEN practice:allkeys-lru:30
+
+# 11. 关闭临时实例并确认状态
+redis-cli -p 6381 SHUTDOWN NOSAVE
+redis-cli -p 6381 PING
+redis-cli -p 6379 PING
+
+# 12. 确认目录内遗留文件
+sudo ls -la /var/lib/redis-allkeys-lru-20260915
+sudo find /var/lib/redis-allkeys-lru-20260915 -maxdepth 1 -type f -printf '%f %s bytes\n'
+
+# 13. 手动确认后清理
+sudo rm -i /var/lib/redis-allkeys-lru-20260915/redis.log
+sudo rmdir /var/lib/redis-allkeys-lru-20260915
+sudo ls -ld /var/lib/redis-allkeys-lru-20260915
+```
+## 2026-09-15 Redis 6381 隔离 volatile-lru 演练与清理
+
+### 概述
+
+- 目的：验证 `volatile-lru` 在内存达到上限时，只淘汰设置了 TTL 的 key，不淘汰无 TTL key。
+- 实例：`127.0.0.1:6381`
+- 临时目录：`/var/lib/redis-volatile-lru-20260915`
+- 实验结束后已关闭实例并清理目录。
+
+### 启动前检查与创建目录
+
+```bash
+sudo ss -lntp 'sport = :6381'
+```
+
+输出显示没有进程监听 `6381`。
+
+```bash
+sudo install -d -o redis -g redis -m 700 /var/lib/redis-volatile-lru-20260915
+```
+
+### 启动隔离实例并验证配置
+
+```bash
+sudo -u redis redis-server \
+  --bind 127.0.0.1 \
+  --port 6381 \
+  --dir /var/lib/redis-volatile-lru-20260915 \
+  --appendonly no \
+  --save "" \
+  --maxmemory 1048576 \
+  --maxmemory-policy volatile-lru \
+  --daemonize yes \
+  --pidfile /var/lib/redis-volatile-lru-20260915/redis.pid \
+  --logfile /var/lib/redis-volatile-lru-20260915/redis.log \
+  --supervised no
+```
+
+```bash
+redis-cli -p 6381 PING
+redis-cli -p 6381 CONFIG GET maxmemory
+redis-cli -p 6381 CONFIG GET maxmemory-policy
+```
+
+关键输出：
+
+```text
+PONG
+maxmemory
+1048576
+maxmemory-policy
+volatile-lru
+```
+
+### 写入测试数据
+
+```bash
+value=$(printf 'A%.0s' $(seq 1 65536))
+
+for i in $(seq 1 3); do
+  redis-cli -p 6381 SET "practice:volatile-lru:no-ttl:$i" "$value"
+done
+
+for i in $(seq 1 30); do
+  redis-cli -p 6381 SET "practice:volatile-lru:ttl:$i" "$value" EX 86400
+done
+```
+
+关键输出：
+
+```text
+OK
+```
+
+说明：
+
+- 每个 value 为 65536 字节。
+- 无 TTL key：`practice:volatile-lru:no-ttl:1` 到 `:3`
+- 带 TTL key：`practice:volatile-lru:ttl:1` 到 `:30`
+- `EX 86400` 表示过期时间为 86400 秒，即 24 小时。
+
+### 验证淘汰结果
+
+```bash
+redis-cli -p 6381 INFO stats
+redis-cli -p 6381 INFO stats | grep -E '^(evicted_keys:)'
+redis-cli -p 6381 DBSIZE
+redis-cli -p 6381 --scan --pattern 'practice:volatile-lru:*' | sort -V
+```
+
+关键输出：
+
+```text
+evicted_keys:27
+(integer) 6
+practice:volatile-lru:no-ttl:1
+practice:volatile-lru:no-ttl:2
+practice:volatile-lru:no-ttl:3
+practice:volatile-lru:ttl:28
+practice:volatile-lru:ttl:29
+practice:volatile-lru:ttl:30
+```
+
+结论：
+
+- 总共写入 30 个带 TTL key，最后保留 3 个。
+- 被淘汰数量：`30 - 3 = 27`
+- 无 TTL key 全部保留，即使它们写入时间更早。
+- `volatile-lru` 只在设置了 TTL 的 key 中执行淘汰。
+
+### 验证 TTL 与数据长度
+
+```bash
+for key in \
+  practice:volatile-lru:no-ttl:1 \
+  practice:volatile-lru:ttl:28 \
+  practice:volatile-lru:ttl:29 \
+  practice:volatile-lru:ttl:30
+do
+  printf '%s TTL=%s\n' "$key" "$(redis-cli -p 6381 TTL "$key")"
+done
+
+redis-cli -p 6381 STRLEN practice:volatile-lru:no-ttl:1
+redis-cli -p 6381 STRLEN practice:volatile-lru:ttl:30
+```
+
+关键输出：
+
+```text
+practice:volatile-lru:no-ttl:1 TTL=-1
+practice:volatile-lru:ttl:28 TTL=86135
+practice:volatile-lru:ttl:29 TTL=86135
+practice:volatile-lru:ttl:30 TTL=86135
+(integer) 65536
+(integer) 65536
+```
+
+说明：
+
+- `TTL=-1` 表示 key 存在但没有设置过期时间。
+- `TTL=86135` 表示 key 存在且还有剩余过期时间。
+- 两个 key 的 `STRLEN` 都是 65536，数据长度未被截断。
+
+### 验证内存状态
+
+```bash
+redis-cli -p 6381 INFO memory | grep -E '^(used_memory:|used_memory_human:|maxmemory:|maxmemory_human:|maxmemory_policy:)'
+```
+
+关键输出：
+
+```text
+used_memory:923472
+used_memory_human:901.83K
+maxmemory:1048576
+maxmemory_human:1.00M
+maxmemory_policy:volatile-lru
+```
+
+### 关闭实例并验证
+
+```bash
+redis-cli -p 6381 SHUTDOWN NOSAVE
+redis-cli -p 6381 PING
+redis-cli -p 6379 PING
+```
+
+关键输出：
+
+```text
+Could not connect to Redis at 127.0.0.1:6381: Connection refused
+PONG
+```
+
+结论：6381 临时实例已停止，正式 6379 实例正常。
+
+### 清理临时目录
+
+```bash
+sudo ls -la /var/lib/redis-volatile-lru-20260915
+sudo find /var/lib/redis-volatile-lru-20260915 -maxdepth 1 -type f -printf '%f %s bytes\n'
+```
+
+关键输出：
+
+```text
+redis.log 2745 bytes
+```
+
+```bash
+sudo rm -i /var/lib/redis-volatile-lru-20260915/redis.log
+sudo rmdir /var/lib/redis-volatile-lru-20260915
+sudo ls -ld /var/lib/redis-volatile-lru-20260915
+```
+
+关键输出：
+
+```text
+ls: 无法访问/var/lib/redis-volatile-lru-20260915: 没有那个文件或目录
+```
+
+结论：临时日志和空目录已清理，清理目标不涉及正式 `6379`、`/var/lib/redis`、AOF 或 RDB。
+
+## 2026-09-15 Redis 内核参数调整与验证
+
+### 调整前检查
+
+```bash
+redis-cli -p 6379 PING
+redis-cli -p 6379 CONFIG GET tcp-backlog
+sysctl net.core.somaxconn
+sysctl vm.overcommit_memory
+cat /sys/kernel/mm/transparent_hugepage/enabled
+```
+
+关键输出：
+
+```text
+PONG
+tcp-backlog 511
+net.core.somaxconn = 128
+vm.overcommit_memory = 0
+[always] madvise never
+```
+
+### 备份并写入 sysctl 配置
+
+```bash
+sudo cp -a /etc/sysctl.conf "/etc/sysctl.conf.bak-$(date +%Y%m%d-%H%M%S)"
+sudo tee /etc/sysctl.d/99-redis.conf >/dev/null <<'EOF'
+net.core.somaxconn = 1024
+vm.overcommit_memory = 1
+EOF
+sudo sysctl --system
+```
+
+关键输出：
+
+```text
+- Applying /etc/sysctl.d/99-redis.conf ...
+  net.core.somaxconn = 1024
+  vm.overcommit_memory = 1
+```
+
+复核：
+
+```bash
+sysctl net.core.somaxconn
+sysctl vm.overcommit_memory
+```
+
+```text
+net.core.somaxconn = 1024
+vm.overcommit_memory = 1
+```
+
+### 关闭并持久化 THP 配置
+
+```bash
+echo never | sudo tee /sys/kernel/mm/transparent_hugepage/enabled
+cat /sys/kernel/mm/transparent_hugepage/enabled
+
+sudo tee /etc/tmpfiles.d/redis-disable-thp.conf >/dev/null <<'EOF'
+w /sys/kernel/mm/transparent_hugepage/enabled - - - - never
+EOF
+```
+
+关键输出：
+
+```text
+never
+always madvise [never]
+```
+
+### 重启 Redis 验证监听队列
+
+```bash
+sudo ss -lntp 'sport = :6379'
+sudo systemctl restart redis
+redis-cli -p 6379 PING
+sudo ss -lntp 'sport = :6379'
+redis-cli -p 6379 CONFIG GET tcp-backlog
+```
+
+关键输出：
+
+```text
+LISTEN 0 128 127.0.0.1:6379
+PONG
+LISTEN 0 511 127.0.0.1:6379
+tcp-backlog 511
+```
+
+### 最终复核
+
+```bash
+sysctl net.core.somaxconn
+sysctl vm.overcommit_memory
+cat /sys/kernel/mm/transparent_hugepage/enabled
+```
+
+关键输出：
+
+```text
+net.core.somaxconn = 1024
+vm.overcommit_memory = 1
+always madvise [never]
+```
+
+结论：三项内核参数调整完成；Redis 重启后实际监听队列从 `128` 变为 `511`，服务仍返回 `PONG`。
+
+## 2026-09-15 Redis 巡检手册验证
+
+### 服务、监听与基础配置
+
+```bash
+systemctl is-active redis
+systemctl is-enabled redis
+sudo ss -lntp 'sport = :6379'
+redis-cli -p 6379 PING
+redis-cli -p 6379 DBSIZE
+redis-cli -p 6379 CONFIG GET maxmemory
+redis-cli -p 6379 CONFIG GET maxmemory-policy
+redis-cli -p 6379 CONFIG GET appendonly
+redis-cli -p 6379 CONFIG GET save
+redis-cli -p 6379 CONFIG GET dir
+redis-cli -p 6379 CONFIG GET dbfilename
+```
+
+关键输出：
+
+```text
+active
+enabled
+LISTEN 0 511 127.0.0.1:6379
+PONG
+(integer) 3
+maxmemory 134217728
+maxmemory-policy noeviction
+appendonly yes
+save 900 1 300 10 60 10000
+dir /var/lib/redis
+dbfilename dump.rdb
+```
+
+### 进程、客户端、持久化与内存状态
+
+```bash
+redis-cli -p 6379 INFO server | grep -E '^(redis_version:|process_id:|uptime_in_seconds:|uptime_in_days:)'
+redis-cli -p 6379 INFO clients | grep -E '^(connected_clients:|blocked_clients:)'
+redis-cli -p 6379 CONFIG GET 'append*'
+redis-cli -p 6379 INFO persistence | grep -E '^(rdb_last_bgsave_status:|rdb_last_save_time:|rdb_bgsave_in_progress:|aof_enabled:|aof_last_write_status:|aof_rewrite_in_progress:)'
+redis-cli -p 6379 INFO memory | grep -E '^(used_memory_human:|used_memory_peak_human:|maxmemory_human:|maxmemory_policy:|mem_fragmentation_ratio:)'
+redis-cli -p 6379 INFO stats | grep -E '^(evicted_keys:|rejected_connections:|keyspace_hits:|keyspace_misses:)'
+```
+
+关键输出：
+
+```text
+redis_version:3.2.12
+process_id:18184
+uptime_in_seconds:1926
+uptime_in_days:0
+connected_clients:1
+blocked_clients:0
+appendfsync everysec
+appendonly yes
+rdb_bgsave_in_progress:0
+rdb_last_bgsave_status:ok
+aof_enabled:1
+aof_rewrite_in_progress:0
+aof_last_write_status:ok
+used_memory_human:793.88K
+used_memory_peak_human:793.88K
+maxmemory_human:128.00M
+maxmemory_policy:noeviction
+mem_fragmentation_ratio:3.29
+evicted_keys:0
+rejected_connections:0
+```
+
+### 持久化文件、key 分布与日志
+
+```bash
+sudo ls -lh /var/lib/redis
+sudo find /var/lib/redis -maxdepth 1 -type f -printf '%f %s bytes %TY-%Tm-%Td %TH:%TM\n'
+redis-cli -p 6379 LASTSAVE
+date -d "@$(redis-cli -p 6379 LASTSAVE)" '+%F %T %Z'
+redis-cli -p 6379 INFO keyspace
+sudo journalctl -u redis -p err..alert --since "24 hours ago" --no-pager
+```
+
+关键输出：
+
+```text
+appendonly.aof 212 bytes 2026-09-14 11:41
+dump.rdb 185 bytes 2026-09-15 15:49
+dump.rdb.before-restart-20260913-183303 158 bytes 2026-09-13 17:35
+LASTSAVE 1789458586
+2026-09-15 15:49:46 CST
+db0:keys=3,expires=0,avg_ttl=0
+-- No entries --
+```
+
+结论：服务、监听、配置、RDB/AOF 状态、持久化文件、内存、key 分布和错误日志巡检全部通过。

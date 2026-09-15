@@ -16,7 +16,13 @@ new-chat/
 │   ├── ops_crontab_basics.md
 │   ├── ops_nginx_reverse_proxy.md
 │   ├── ops_nginx_stage1.md
-│   └── ops_mysql_basics.md
+│   ├── ops_mysql_basics.md
+│   ├── ops_linux_ops_stage1.md
+│   ├── ops_linux_inspection_script.md
+│   ├── ops_git_basics.md
+│   ├── ops_python_basics.md
+│   └── ops_redis_basics.md
+├── scripts/                  已纳入版本管理的运维脚本
 └── 项目记录/
     ├── memory.md
     ├── ops_handoff.md
@@ -36,6 +42,11 @@ new-chat/
 - [Nginx 反向代理](学习总结/ops_nginx_reverse_proxy.md)
 - [Nginx 第一阶段总结](学习总结/ops_nginx_stage1.md)
 - [MySQL/MariaDB 基础](学习总结/ops_mysql_basics.md)
+- [Linux 运维强化](学习总结/ops_linux_ops_stage1.md)
+- [Linux 巡检脚本](学习总结/ops_linux_inspection_script.md)
+- [Git 基础](学习总结/ops_git_basics.md)
+- [Python 运维脚本](学习总结/ops_python_basics.md)
+- [Redis 基础运维](学习总结/ops_redis_basics.md)
 
 ### 项目记录
 
@@ -63,6 +74,8 @@ new-chat/
 
 ## 当前进度
 
+2026-09-14：AOF 加载、指定 RDB 隔离回灌、临时实验清理、正式实例 128 MiB 上限及 noeviction 超限行为均已验证。正式 Redis 重启后 maxmemory=134217728、策略为 noeviction，两个练习键可读回；隔离实例 `127.0.0.1:6381` 以 1 MiB 上限实测，前 6 个 65536 字节键写入成功，第 7 个开始返回 OOM 拒写，已有键仍可读，DEL 释放空间后写入恢复。6381 已通过 `SHUTDOWN NOSAVE` 关闭，正式 6379 仍返回 PONG。
+
 ```text
 Linux 基础第一阶段：完成
 网络基础第一阶段：完成
@@ -71,9 +84,31 @@ crontab 第一阶段：完成
 Nginx 第一阶段：完成
 MySQL 基础 SQL、备份恢复、脚本、定时备份和保留策略：完成
 MySQL 用户权限、最小权限、GRANT 和 REVOKE：完成
+Linux 运维强化基础检查、巡检脚本与基础排障复习：完成
+Git 分支、冲突、远程同步与脚本部署：已验证
+Python subprocess、argparse、timeout、logging、退出码：已验证并归档
+当前阶段 3：Redis 基础运维
+Redis 安装、自启、监听与 PING、String、过期、计数器：已验证
+Redis Hash：HSET/HGET/HGETALL/HDEL 已验证，TYPE 返回 hash，HLEN 返回 1
+Hash 键与字段检查：EXISTS/HEXISTS 已验证，server:centos100 存在、role 字段不存在
+Redis List：RPUSH/LRANGE/LPOP/LLEN、FIFO 与取空后键消失已验证
+Redis Set：SADD/SMEMBERS/SCARD/SISMEMBER/SREM、去重与删除最后成员后键消失已验证
+Redis ZSet：ZADD/ZRANGE/ZSCORE/ZCARD/ZREVRANGE/ZREM、分数更新与排序、删空后键消失已验证
+Redis 配置：实际配置路径为 /etc/redis.conf，bind/port/logfile 的运行值与文件内容一致
+Redis 访问边界（重启前检查）：protected-mode=yes，ss 实测 redis-server（pid=1207）监听 127.0.0.1:6379
+Redis 日志：PID 3047 的启动日志显示 DB loaded from disk 和 ready to accept connections
+Redis RDB：save=900 1 300 10 60 10000，快照路径 /var/lib/redis/dump.rdb，手动 BGSAVE 已验证成功
+Redis 持久化状态（AOF 重启后）：aof_enabled=1、aof_rewrite_in_progress=0、aof_last_bgrewrite_status=ok、aof_last_write_status=ok
+Redis RDB 备份：/var/lib/redis/dump.rdb.before-restart-20260913-183303；重启前源与备份均为 158 字节，cmp 退出码为 0
+Redis 正常重启：23:45:36 CST 启动，active (running)、enabled，主进程 3047；GET practice:rdb-check 返回 rdb-ok
+Redis 启动警告：sysctl 实测 somaxconn=128、overcommit_memory=0，THP 当前为 always；只读核验完成，尚未修改参数
+Redis 内存上限：128 MiB 已写入配置文件，2026-09-14 17:10 服务重启后直接读回 134217728，验收通过
+已结束练习：practice:checks、practice:services、practice:priority 均已确认不存在，无需再次清理
+当前练习键：practice:rdb-check 在正常重启后仍读到 rdb-ok，与备份一并保留，尚未清理
+Redis AOF：`appendonly yes` 已写入 `/etc/redis.conf`；`/var/lib/redis/appendonly.aof` 已生成，重启日志确认从 AOF 加载，`practice:aof-check` 读回 `aof-ok`
 ```
 
-下一步：MySQL 常见故障排查，然后完成 MySQL 第一阶段总结并进入 Redis。
+下一步：只读检查 `/var/lib/redis-noeviction-20260914` 的目录内容，并再次确认 6381 无残留监听；用户确认目录只包含本次实验文件后，再指导安全清理该临时目录。正式 6379 的 128 MiB 上限、练习键和 noeviction 策略均已验收，不再重复设置或重启；配置备份 `/etc/redis.conf.before-maxmemory-20260914-165752` 保留。性能调优、断电恢复和高可用尚未验证，原始数据备份与 AOF 保留。
 
 ## Git 保存流程
 

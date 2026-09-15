@@ -4,7 +4,117 @@
 
 用途：重开 Codex 线程、切换到 DeepSeek/GLM/Claude Code，或之后复习时，让新模型快速接上当前学习进度。
 
-最后更新：2026-07-11
+最后更新：2026-09-15
+
+## 当前接续点：noeviction 小节已完成
+
+此前已复核 18 条历史会话及其 40 份原始/恢复记录；本次依据用户连续回传，统一归档 AOF 配置查询、在线启用、配置文件持久化、写入测试、9 月 14 日重启和 AOF 加载日志，以及指定 RDB 备份的隔离回灌验证。RDB 基础、AOF 基础和指定备份回灌均已完成，三项内核参数只读核验也已完成，但断电恢复和性能调优仍未完成。助手未连接虚拟机代做实验；本次 Redis 操作均由用户在 CentOS 执行。
+
+- AOF 初始查询：`appendonly=no`、`appendfsync=everysec`；旧版 Redis 3.2 的 `CONFIG GET appendfilename` 返回空，配置文件第 597 行确认 `appendfilename "appendonly.aof"`。
+- 启用前检查：AOF 文件原先不存在；`/var/lib/redis` 所在根分区可用约 12G、使用率 34%；配置备份为 `/etc/redis.conf.before-aof-20260914-094538`。
+- `redis-cli CONFIG SET appendonly yes` 返回 `OK`；INFO 显示 `aof_enabled:1`、重写未进行、最近重写与写入状态均为 `ok`；AOF 文件生成，大小 139 字节、属主 `redis:redis`。
+- `redis-cli CONFIG REWRITE` 返回 `ERR Rewriting config file: Permission denied`。原因是 Redis 用户虽为配置文件属主，但没有 `/etc` 目录的写权限来创建临时文件；没有放宽目录权限。
+- 管理员执行 `sudo sed -i 's/^appendonly no$/appendonly yes/' /etc/redis.conf`，随后确认第 593 行为 `appendonly yes`，完成磁盘配置持久化；不需要再次执行 `CONFIG SET` 或 `CONFIG REWRITE`。
+- 写入 `practice:aof-check=aof-ok` 后状态为 `aof_last_write_status:ok`。重启后未重新 SET，`GET practice:aof-check` 返回 `"aof-ok"`；PID 5519 的启动日志显示 `DB loaded from append only file: 0.000 seconds`，确认从 AOF 加载。
+- 启动日志中的 backlog/somaxconn、`overcommit_memory`、THP 三项警告已在本任务中完成只读参数核验，结果为 128、0、always；尚未调整内核参数，不能当作调优已经完成。AOF 练习键暂不清理。
+- 指定备份 `/var/lib/redis/dump.rdb.before-restart-20260913-183303` 已通过 `sudo redis-check-rdb` 校验：`Checksum OK`、`RDB looks OK!`、读取 2 个键、0 个过期键。
+- 为避免影响正式 `6379` 实例，已创建 `/var/lib/redis-rdb-restore-20260914`，复制备份为 `dump.rdb`，并设置目录和文件属主为 `redis:redis`。
+- 已用 `redis-server` 在 `127.0.0.1:6380` 启动隔离实例，指定该目录和 RDB 文件，关闭 AOF 与自动保存。`redis-cli -p 6380 INFO keyspace` 返回 `db0:keys=2`；`KEYS '*'` 列出 `server:centos100`、`practice:rdb-check`；日志显示 `DB loaded from disk` 和已监听 6380，确认指定 RDB 实际回灌成功。
+- 恢复原理疑问已在本任务中讲解：`cp` 只准备备份文件，启动指定目录和文件、关闭 AOF 的 `redis-server` 时才自动加载 RDB 到内存；`--save ""` 不阻止启动加载。正式实例由 systemd 管理并已设置开机自启，临时实例本次手动启动；`--daemonize yes` 不等于开机自启，`sudo -u redis` 指 Linux 运行用户。
+- 用户已在 `6380` 实测 `GET practice:rdb-check` 返回 `rdb-ok`、`HGETALL server:centos100` 返回唯一字段 `ip=192.168.6.100`。随后 `SHUTDOWN NOSAVE` 无输出，`6380 PING` 返回 `Connection refused`，正式 `6379 PING` 返回 `PONG`，确认临时实例关闭且正式实例仍正常响应。
+- 临时目录清理已验证：先 ls 确认其中只有 158 字节的 `dump.rdb` 和 2.8K 的 `redis.log`，同时核对原始备份存在且为 158 字节；再对两个临时文件分别用 `rm -i` 确认删除，`rmdir` 删除空目录，最后 ls 返回“没有那个文件或目录”。不要再要求启动、关闭或清理这个实验目录；原始备份、正式数据目录与 AOF 不在删除范围。
+- 新的 noeviction 演练已完成：用户先执行 `sudo ss -lntp 'sport = :6381'`，无输出确认拟用端口空闲；随后以 Redis 用户启动隔离实例 `127.0.0.1:6381`，目录为 `/var/lib/redis-noeviction-20260914`，参数为 `maxmemory=1048576`、`maxmemory-policy=noeviction`、`appendonly no`、`save ""`。
+- 用户写入 30 个 65536 字节 value 的循环：前 6 次 `SET` 成功，key 为 `practice:noeviction:1` 至 `practice:noeviction:6`；第 7 次开始返回 `OOM command not allowed when used memory > 'maxmemory'`，最终 `DBSIZE=6`。查询时 `used_memory=923152`、`maxmemory=1048576`、策略为 noeviction、碎片率 5.71；查询值小于上限不推翻 OOM，因为 OOM 发生在第 7 次写入申请内存的瞬间，而 INFO 是事后查询值。
+- 超限后的边界已验证：`GET practice:noeviction` 返回 `(nil)` 是 key 名写错，实际完整 key 带编号；`STRLEN practice:noeviction:1` 返回 65536，证明已有键仍可读；`DEL practice:noeviction:1` 后，`SET practice:noeviction:after-del small` 成功并可读回，证明释放内存后写入恢复。
+- Redis 3.2 旧版 `redis-cli` 收到服务端 OOM 错误时退出码可能仍为 0，因此脚本中的 `|| { ...; break; }` 没有触发；不能依赖 redis-cli 退出码判断业务失败，需要解析输出或使用支持退出码的新版本。
+- 用户执行 `redis-cli -p 6381 SHUTDOWN NOSAVE` 后，6381 `PING` 返回 `Connection refused`，正式 6379 `PING` 返回 `PONG`，确认临时实例关闭且正式实例正常。随后只读检查 `/var/lib/redis-noeviction-20260914`：目录属主 `redis:redis`，仅剩 2745 字节 `redis.log`，无 RDB/AOF/pid 文件。
+- noeviction 临时目录最终清理已完成：用户用 `sudo rm -i` 确认删除 `redis.log`，`sudo rmdir` 删除空目录，`sudo ls -ld` 返回“没有那个文件或目录”；随后 6381 仍拒绝连接，6379 仍返回 `PONG`。不要用 `rm -rf`，也不要再要求启动、关闭或清理这个实验目录；正式数据目录不在删除范围。
+- 用户只读实测 `net.core.somaxconn=128`、`vm.overcommit_memory=0`，THP 输出 `[always] madvise never`，当前生效选项为 `always`。三项与此前启动警告一致，但不能据此认定当前内存不足或已出现性能故障。 已解释：somaxconn 是连接等待队列限制，不是客户端总数；overcommit=0 为启发式内存分配判断，不代表当前内存不足；THP 的方括号标记当前选项。
+- 调整前内存快照：整机 total=1980 MiB、used=936、free=247、buff/cache=796、available=866（约 44%），Swap 2047 MiB、used=0；Redis used_memory=812936 字节（793.88K）、RSS=6045696 字节（5.77M）、碎片率=7.44，maxmemory=0、策略 noeviction。 available 与 Swap 未显示明显内存压力；7.44 的比率受小分配量及进程额外开销影响，不能只凭它认定泄漏或强制重启。该快照在上限修改之前，不代表修改后的重新测量。
+- 用户执行 `redis-cli -p 6379 CONFIG SET maxmemory 134217728` 返回 `OK`，随后 CONFIG GET 返回 `maxmemory` 与 `134217728`，确认正式实例运行时上限为 128 MiB。本次只修改 maxmemory，没有修改淘汰策略。 在线设置时未单独读取策略；本轮重启后已查询确认 noeviction。128 MiB 只作学习预算，未验证超限拒写或淘汰行为。
+- 用户已核对 `/etc/redis.conf` 第 537 行由 maxmemory 注释示例变为 `maxmemory 134217728`；当前运行值与该文件中的上限均为 128 MiB。配置备份为 `/etc/redis.conf.before-maxmemory-20260914-165752`，复制输出已回传。17:10:21 服务重启后已直接读回 134217728，加载验收通过。 第 560 行 maxmemory-policy 与第 571 行 maxmemory-samples 在修改前均为注释，不把注释当作新配置生效证据。
+- 2026-09-14 17:10:21 CST 正式 redis 服务重启后为 `active (running)`，主进程 PID 9261，ExecStop 为 `0/SUCCESS`，仍为 enabled；用户未重新 CONFIG SET，直接 CONFIG GET maxmemory 返回 `134217728`，128 MiB 上限的服务重启加载验收通过。 vendor preset 的 disabled 是默认策略，不是当前开机自启状态；status 显示的 limit.conf 附加配置未读取内容，不能仅据文件名解释其限制。
+- 本轮重启后已执行 `redis-cli -p 6379 MGET practice:rdb-check practice:aof-check`，依次返回 `rdb-ok`、`aof-ok`；`redis-cli -p 6379 CONFIG GET maxmemory-policy` 返回 `noeviction`。两个指定字符串键和当前策略复核通过，结合上限读回，正式实例为 128 MiB + noeviction；没有新读回 Hash、核对 AOF 加载日志、验证全部键完整性或执行整机重启。
+- 历史停点说明：当时曾计划先检查 6381 端口；该检查、隔离实例启动、noeviction 超限拒写、已有键读取、删除后恢复写入、实例关闭和临时目录最终清理均已完成。`allkeys-lru` 与 `volatile-lru` 隔离实验也已完成，当前下一步是依次评估 `net.core.somaxconn`、`vm.overcommit_memory`、THP，并整理 Redis 巡检手册，最后衔接 Docker/Compose。不向正式 `6379` 填充大量数据，不重做已结束的 `6380` 回灌。
+
+- Linux/网络/Shell/Nginx/MariaDB 基础、Linux 运维强化基础检查与巡检脚本、Git/Python 基础脚本流程均已有学习和验证记录。
+- Python 已归档推送；用户随后又成功提交并推送 `22b3b24 记录 Python 阶段提交结果`。不要重新要求复制或提交旧 Python 脚本。
+- 当前处于阶段 3“服务运维深化”的 Redis 入门。Redis `3.2.12-2.el7` 已安装，实测 `active (running)`、`enabled`、监听 `127.0.0.1:6379`，`PING` 返回 `PONG`。
+- 已验证：`SET/GET/DEL`、`EX/TTL`、`INCR/INCRBY/DECR`、`HSET/HGET/HGETALL/HDEL`。不要把 Redis 当作尚未开始的模块。
+- 用户先成功读取 `ip` 和 `role`；误输入 `HDET` 被 Redis 以未知命令拒绝，随后自行改为 `HDEL`，返回删除字段数 `1`。
+- 最后实测 Hash：`server:centos100` 仅剩 `ip=192.168.6.100`；`role` 已删除，整个键仍存在。
+- 已实际执行 `EXISTS server:centos100` 返回 `1`、`HEXISTS server:centos100 role` 返回 `0`；键和字段的存在性检查已验证，不再作为待执行步骤。
+- 已实际执行 `TYPE server:centos100` 返回 `hash`、`HLEN server:centos100` 返回 `1`；Hash 类型与字段数量已验证，本轮未重新读取字段值。
+
+List 基础小节已经完成：
+
+- `RPUSH practice:checks nginx mariadb` 返回 `2`，`LRANGE practice:checks 0 -1` 显示 `nginx`、`mariadb`，顺序与追加一致。
+- 第一次 `LPOP` 返回 `nginx`，随后 `LRANGE` 只剩 `mariadb`，`LLEN` 返回 `1`。
+- 第二次 `LPOP` 返回 `mariadb`，随后 `LLEN` 返回 `0`、`EXISTS practice:checks` 返回 `0`；练习键已随最后一个元素取出而自动消失，不需要再手动删除。
+- 已验证 `RPUSH` 右端加入、`LPOP` 左端取出的先进先出（FIFO），以及列表范围读取、长度和取空行为。这里只保存并取出名称，没有执行真实巡检；重复元素仅讲过概念，没有单独实测重复追加。
+
+Set 基础小节已经完成：
+
+- `SADD practice:services nginx mariadb nginx` 返回 `2`，`SMEMBERS` 显示 `mariadb`、`nginx`，验证去重，输出不能按插入顺序理解。
+- `SCARD` 返回 `2`；`SISMEMBER` 查询 `nginx` 返回 `1`、查询 `redis` 返回 `0`，只说明名称是否在集合里，不代表服务运行状态。
+- 删除 `nginx` 的 `SREM` 返回 `1`；再次查成员返回 `0`，`SMEMBERS` 只剩 `mariadb`。
+- 删除最后的 `mariadb` 返回 `1`，随后用户实际执行的是 `SMEMBERS`，返回 `(empty list or set)`；`EXISTS practice:services` 返回 `0`，集合键已自动消失。没有回传取空后的 `SCARD` 输出，不能记成已验证 `SCARD=0`。
+- 已解释命令名称：`SCARD` 的 `CARD` 来自 cardinality（基数，即成员总数），`SREM` 的 `REM` 来自 remove（移除），前缀 `S` 表示 Set。`SREM` 返回本次删除数量，不是剩余成员数。
+
+ZSet 基础小节已经完成：
+
+- `ZADD practice:priority 20 nginx 10 mariadb 30 redis` 返回 `3`；`ZRANGE ... 0 -1 WITHSCORES` 按升序显示 `mariadb(10) → nginx(20) → redis(30)`。`WITHSCORES` 按成员、分数成对输出，六行对应三个成员。
+- `ZADD practice:priority 5 nginx` 返回 `0`，表示没有新增成员，不是更新失败；`ZSCORE` 返回 `"5"`，升序变为 `nginx(5) → mariadb(10) → redis(30)`，`ZCARD` 仍为 `3`。
+- `ZREVRANGE practice:priority 0 -1 WITHSCORES` 实际显示 `redis(30) → mariadb(10) → nginx(5)`，降序读取已经验证；`0 -1` 是索引范围，不是分数范围。
+- `ZREM practice:priority nginx mariadb redis` 返回 `3`，随后 `ZCARD` 返回 `0`、`EXISTS` 返回 `0`。删除全部成员后键已自动消失，不保留空 ZSet 键，也不需要再次清理。
+- 本节只操作服务名称和分数，没有修改真实服务启动顺序或优先级。命令采用 Redis 3.2 支持的语法，不直接照搬新版本命令。
+
+配置、日志与本机监听小节已经完成：
+
+- `systemctl cat redis --no-pager` 显示启动参数使用 `/etc/redis.conf --supervised systemd`，`INFO server` 的 `config_file` 同样为 `/etc/redis.conf`。补充单元中的 `LimitNOFILE=10240` 是文件描述符上限设置，不是已验证的最大客户端数。
+- `CONFIG GET bind/port/logfile` 是分别执行的三条命令，返回 `127.0.0.1`、`6379`、`/var/log/redis/redis.log`；只读筛选配置文件第 61、84、163 行，三项与运行值一致。不要向 Redis 3.2 布置多配置项参数的新版本查询语法。
+- 日志末尾 20 行包含 9 月 13 日四轮 RDB 自动后台保存成功，最后结束于 `14:27:39.157`。当时已解释保存条件、后台子进程及写时复制内存不是快照文件大小；后续文件检查和手动保存见下方 RDB 进度，重启恢复仍未验证。
+- `CONFIG GET protected-mode` 返回 `yes`；随后 `ss` 实测 `LISTEN 0 128 127.0.0.1:6379 *:*`，进程为 `redis-server`、`pid=1207`、`fd=4`。实际本地监听与配置一致，对端列的 `*:*` 不等于开放所有网卡，队列数和 `fd` 不是客户端数。
+- 全程未改配置、重启服务、开放端口或检查认证密码。重复粘贴的同一段配置和日志只记录一次，不补造执行次数，也不把复制转义当成新故障。
+
+RDB 小节当前已验证：
+
+- 分别查询 `save`、`dir`、`dbfilename`，返回 `900 1 300 10 60 10000`、`/var/lib/redis`、`dump.rdb`。三组保存规则内部为“且”，组间为“或”；不是必须修改不同的键，也不是固定无条件定时保存。
+- 手动保存前用 `sudo ls -lh /var/lib/redis/dump.rdb` 查到 131 字节、修改时间 `9月 13 14:27`；随后重启前检查源文件和备份，均为 158 字节、`redis/redis`、修改时间 `17:35`。131 字节是早期基线，158 字节和内容一致性是重启前结果，不当作重启后的复查。
+- `SET practice:rdb-check rdb-ok` 返回 OK；误输入 GRT 后修正为 GET，读到 `rdb-ok`。该 GET 在 BGSAVE 之前，不是恢复后的读回；没有删除练习键的记录。
+- BGSAVE 返回 `Background saving started`；随后的 INFO 中 `rdb_bgsave_in_progress=0`、`rdb_last_bgsave_status=ok`、`rdb_changes_since_last_save=0`、`rdb_last_save_time=1789292105`、`aof_enabled=0`，确认手动后台保存成功，当前 AOF 未开启。相同输出重复贴出不另记执行次数。
+- 已解释 cp/scp：当前快照和备份均在 CentOS 内，应使用 cp；scp 主要通过 SSH 跨主机复制。示例文件和示例上传没有实操，不当作已经完成的备份或传输。
+
+快照复制已有用户成功回传：
+
+```text
+"/var/lib/redis/dump.rdb" -> "/var/lib/redis/dump.rdb.before-restart-20260913-183303"
+```
+
+早期仅贴出的 `cmp -s ... && echo ... || echo ...` 不算执行；本次用户已实际运行不带 `-s` 的 `sudo cmp`，无输出，紧接着 `echo $?` 返回 `0`。结合两个文件均为 158 字节，确认重启前逐字节一致。cp 的 `-a` 保留修改时间，备份显示 17:35 不代表在 17:35 创建。
+
+正常重启与数据加载已验证：
+
+- 用户执行 `sudo systemctl restart redis`，随后 status 为 `active (running)`，启动时间 `2026-09-13 23:45:36 CST`，主进程 `3047`，ExecStop 为 `status=0/SUCCESS`，仍为 enabled。vendor preset 的 disabled 是默认策略，不是关闭了当前自启。
+- 重启后未重新 SET，`GET practice:rdb-check` 返回 `rdb-ok`，说明原练习值可以读回；没有删除练习键或备份。
+- 重启后 INFO：`loading=0`、`rdb_changes_since_last_save=0`、`rdb_bgsave_in_progress=0`、`rdb_last_save_time=1789314336`、`rdb_last_bgsave_status=ok`、`aof_enabled=0`。RDB 两项耗时为 -1，不代表失败，也不能据此或 last_save_time 声称新进程做过一次 BGSAVE。
+- 最新 tail 输出中，PID 3047 在 `23:45:36.212` 记录 `DB loaded from disk: 0.000 seconds` 和端口 6379 的就绪信息。结合 AOF 关闭和 GET，确认正常启动加载 RDB；状态输出里的进程参数及日志不是重启后重新运行 ss 的证据。
+
+本次三条启动 WARNING 已记录为待检查项：请求 backlog=511、somaxconn=128；overcommit_memory=0；THP 开启。它们提示连接排队、低内存下后台保存及延迟/内存风险，不是本次服务启动或加载失败。尚未读取对应内核文件、调整参数或配置持久化，后续在内存与性能小节逐项核验，不直接照日志修改整机配置。
+
+验证边界：正常停止 Redis 可能再次保存 RDB，这次没有把备份文件复制回正式位置，也没有宕机或断电实验；不能称为指定备份恢复通过或全部键完整性已验证。源快照可能在重启时更新，之前 cmp=0 也不是重启后的持续一致性保证。
+
+下一步讲清 RDB 快照与 AOF 写操作日志的区别，然后在 CentOS 只读查询以下三项；尚未收到结果，不提前开启 AOF：
+
+```bash
+redis-cli CONFIG GET appendonly
+redis-cli CONFIG GET appendfilename
+redis-cli CONFIG GET appendfsync
+```
+
+本次按已完成的 RDB 基础小节统一记录，继续采用概念、少量命令、用户回传、解释输出的节奏。保留练习键和备份；后续安排 AOF 启用/恢复、备份文件恢复专项、内存限制/淘汰、警告核验、故障演练和巡检集成。SSH 密钥加固、MySQL 慢查询/锁等仍属于后续补缺，不因基础阶段完成就视为全部掌握。
+
+课程正文与状态见 `学习总结/ops_redis_basics.md`，实际命令见 `项目记录/ops_command_history.md` 的 Redis 小节。下方保留早期交接，不再代表当前停点。
 
 ## 1. 学习目标
 
@@ -30,6 +140,7 @@
 - 用中文。
 - 我是纯小白，不要默认我懂。
 - 一次不要给太多命令，最好 1 到 3 条。
+- 回复要更快，但不要因此缩短讲解、跳过必要核对或乱给信息；减少不必要的重复查阅，明确区分已验证、待验证与推测。这是用户于 2026-09-13 补充强调的偏好。
 - 等我执行完、确认懂了，再进入下一步。
 - 每个命令都要解释语法、参数、作用。
 - 我问“什么意思”时，先停下来解释，不要继续往后推。
@@ -52,7 +163,7 @@
 
 ## 2.1 记忆和交接文件维护要求
 
-以后每次学习结束或阶段结束，都要同步维护本地文件，不能只在聊天里说完就结束。
+按小节统一维护记录：完成一个小节的讲解、练习和验证后，再同步更新本地文件；小节进行中只解释输出、继续教学，不要每完成一条命令或每收到一次回传就修改文件。这是用户于 2026-09-13 明确调整的记录频率。
 
 必须维护这些信息：
 
@@ -1444,6 +1555,16 @@ Linux 运维强化基础检查已经完成。下一步可先做一次阶段复�
 - `.log` 文件受 `.gitignore` 的 `*.log` 规则忽略，不直接提交日志文件。
 - 下一步：通过 `scp` 将 `args_demo.py` 复制到仓库 `scripts/`，检查内容和语法，再提交 Python 阶段记录并推送。
 
+## 2026-09-15 Redis allkeys-lru 小节完成
+
+- 已使用隔离实例 `127.0.0.1:6381` 完成 `allkeys-lru` 演练，工作目录为 `/var/lib/redis-allkeys-lru-20260915`。
+- 实例配置验证为 `maxmemory=1048576`、`maxmemory-policy=allkeys-lru`、`appendonly no`，且 `save ""` 生效。
+- 连续写入 30 个约 65536 字节的 `practice:allkeys-lru:$i` value，全部返回 `OK`；`evicted_keys=24`，`DBSIZE=6`。
+- 最终保留 key 为 `practice:allkeys-lru:25` 至 `practice:allkeys-lru:30`；`:1` 和 `:24` 已被淘汰，`:25` 和 `:30` 仍存在，`:30` 的 `STRLEN=65536`。
+- `SHUTDOWN NOSAVE` 后 6381 拒绝连接，6379 返回 `PONG`；实验目录最终仅剩 `redis.log`，用户已确认删除日志并移除目录。
+- 对比结论：`allkeys-lru` 在内存不足时淘汰旧 key，使新写入继续成功；这与 `noeviction` 的 OOM 拒写形成对比。
+- 下一步：进入 `volatile-lru` 演练，重点验证它只淘汰设置了 TTL 的 key。
+
 ## 2026-09-12 Python 脚本复制状态
 
 - 已通过 Windows PowerShell 的 `scp` 将 CentOS `/home/atguigu/args_demo.py` 复制到仓库 `scripts/args_demo.py`。
@@ -1459,3 +1580,40 @@ Linux 运维强化基础检查已经完成。下一步可先做一次阶段复�
 - `git status` 显示 `Your branch is up to date with 'origin/main'` 和 `nothing to commit, working tree clean`。
 - Python 阶段资料已纳入 Git 并同步到 GitHub；下一步进入后续运维自动化或服务运维模块。
 
+## 2026-09-15 Redis volatile-lru 小节完成
+
+- 隔离实例：`127.0.0.1:6381`，临时目录：`/var/lib/redis-volatile-lru-20260915`。
+- 已验证 `maxmemory=1048576`、`maxmemory-policy=volatile-lru`、`appendonly=no`、`save=""`。
+- 写入 3 个无 TTL key 和 30 个 `EX 86400` key；结果 `evicted_keys=27`、`DBSIZE=6`。
+- 保留 3 个无 TTL key 与 `ttl:28`、`ttl:29`、`ttl:30`，证明 `volatile-lru` 只在设置过期时间的 key 中淘汰。
+- `no-ttl:1 TTL=-1` 表示无过期时间；`ttl:28` 到 `ttl:30` 均能读出 TTL，长度仍为 65536 字节。
+- 实例已 `SHUTDOWN NOSAVE`，6381 拒绝连接，6379 返回 `PONG`，临时目录已清理。
+
+## 当时下一步（历史记录）
+
+1. 整理 Redis 巡检手册，纳入状态、端口、应用响应、持久化状态和内核参数。
+2. 之后进入 Docker/Compose。
+
+## 2026-09-15 Redis 内核参数调优完成
+
+- 调整前确认：Redis `tcp-backlog=511`，但 `net.core.somaxconn=128`；`vm.overcommit_memory=0`；THP 为 `[always]`。
+- 已备份 `/etc/sysctl.conf`，并创建 `/etc/sysctl.d/99-redis.conf`，写入 `net.core.somaxconn=1024`、`vm.overcommit_memory=1`。
+- `sudo sysctl --system` 后复核两项参数分别为 `1024`、`1`。
+- 已运行时关闭 THP，并创建 `/etc/tmpfiles.d/redis-disable-thp.conf`，THP 复核为 `always madvise [never]`。
+- 重启 Redis 前监听队列 `Send-Q=128`；`sudo systemctl restart redis` 后 `PING=PONG`、`Send-Q=511`、`tcp-backlog=511`。
+- 本节不需要重做。下一步整理 Redis 巡检手册，再衔接 Docker/Compose。
+
+## 2026-09-15 Redis 巡检手册完成
+
+- 巡检结果：Redis `active`、`enabled`、监听 `127.0.0.1:6379`、`Send-Q=511`、`PING=PONG`、`DBSIZE=3`。
+- 配置结果：`maxmemory=134217728`、`maxmemory-policy=noeviction`、`appendonly=yes`、`appendfsync=everysec`、`save="900 1 300 10 60 10000"`、`dir=/var/lib/redis`、`dbfilename=dump.rdb`。
+- 持久化状态：`rdb_last_bgsave_status=ok`、`aof_last_write_status=ok`，RDB/AOF 后台任务均不在执行中。
+- 文件结果：`appendonly.aof` 212 字节，`dump.rdb` 185 字节，`LASTSAVE` 为 `2026-09-15 15:49:46 CST`；`dump.rdb.before-restart-20260913-183303` 是历史备份。
+- 内存与日志：`used_memory=793.88K`、上限 `128.00M`、`evicted_keys=0`、`rejected_connections=0`，最近 24 小时错误日志为空。
+- `CONFIG GET apendonly` 是拼写错误；Redis 3.2 下 `appendfilename` 查询为空时用 `append*` 和实际文件检查判断，不视为异常。
+- 本节巡检手册已完成，不要重做。下一步进入 Docker/Compose。
+
+## 当前下一步（最新）
+
+1. 进入 Docker/Compose。
+2. 优先完成 Docker 安装、镜像、容器、端口映射和数据卷基础。

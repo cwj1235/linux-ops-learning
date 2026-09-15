@@ -6,6 +6,11 @@
 
 - 当前目录作为项目根目录；如果以后加入 Git 仓库，则优先使用 Git 仓库根目录。
 
+## Windows 补丁执行
+
+- 在 Windows 项目中执行 `apply_patch` 时，优先使用 Git Bash，并用单引号 here-doc 传递补丁内容。
+- 不要通过 PowerShell 转义补丁内容，避免引号、反斜杠和换行被改写。
+
 ## 项目记忆
 
 - 当前项目的记忆文件是 `<project-root>/项目记录/memory.md`。
