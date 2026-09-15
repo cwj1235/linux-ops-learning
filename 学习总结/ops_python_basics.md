@@ -848,16 +848,18 @@ cat /home/atguigu/args_demo.log
 tail -n 10 /home/atguigu/args_demo.log
 ```
 
-### 39.10 当前准确状态
+### 39.10 当前准确状态（2026-09-13 复核）
 
 ```text
 system_info.py：已完成 subprocess 基础示例和 sys.exit() 验证。
 args_demo.py：已完成参数解析、命令执行、错误捕获、失败汇总、verbose、timeout 和 logging。
 Python 学习笔记：已完整记录本阶段 1～38 节和本总览。
-Windows Git 仓库：Python 记录文件有未提交修改。
-CentOS：args_demo.py 和日志文件已实际存在；args_demo.py 已复制到 Windows Git 仓库的 `scripts/args_demo.py`，但尚未提交。
+Windows Git 仓库：Python 脚本与阶段记录已于 2026-09-12 提交并推送（d573677），提交结果补档也已推送（22b3b24）。
+CentOS：args_demo.py 和日志文件已实际存在；args_demo.py 已复制并纳入仓库 scripts/args_demo.py，日志仍只保留在 CentOS。
 日志文件：*.log 已被项目 .gitignore 忽略，不应直接提交日志内容。
 ```
+
+以上是阶段归档状态；后续补档会产生新的修改，当前工作区以 `git status` 为准，不能把历史 clean 当作现在的状态。
 
 一句话记住：
 
