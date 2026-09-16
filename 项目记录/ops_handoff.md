@@ -4,9 +4,9 @@
 
 用途：重开 Codex 线程、切换到 DeepSeek/GLM/Claude Code，或之后复习时，让新模型快速接上当前学习进度。
 
-最后更新：2026-09-15
+最后更新：2026-09-16
 
-## 当前接续点：noeviction 小节已完成
+## 历史接续点（Redis noeviction 小节，最新停点见文件末尾的 Ansible 小节）
 
 此前已复核 18 条历史会话及其 40 份原始/恢复记录；本次依据用户连续回传，统一归档 AOF 配置查询、在线启用、配置文件持久化、写入测试、9 月 14 日重启和 AOF 加载日志，以及指定 RDB 备份的隔离回灌验证。RDB 基础、AOF 基础和指定备份回灌均已完成，三项内核参数只读核验也已完成，但断电恢复和性能调优仍未完成。助手未连接虚拟机代做实验；本次 Redis 操作均由用户在 CentOS 执行。
 
@@ -1694,3 +1694,60 @@ Linux 运维强化基础检查已经完成。下一步可先做一次阶段复�
 
 1. 检查并提交 Docker/Compose 阶段学习记录。
 2. 推送到远程仓库后，再规划下一阶段学习内容。
+
+## 2026-09-16 Ansible 安装与 Inventory 完成
+
+- 已通过 EPEL 在 CentOS 7 上安装 Ansible `2.9.27`，控制端 Python 为 `2.7.5`。
+- 在 `/root` 执行 `ansible localhost -m ping` 曾出现 `Permission denied: '.'`；切换到 `/home/atguigu` 后成功返回 `pong`，确认是目录权限问题。
+- 已创建 `~/ansible-practice/inventory.ini`，定义 `[local]` 组，包含 `localhost ansible_connection=local`。
+- `ansible-inventory -i inventory.ini --list` 解析出 `local` 组和 `ansible_connection=local`。
+- `ansible local -i inventory.ini -m ping` 返回 `pong`。
+- `setup` 模块筛选 `ansible_distribution*`，识别系统为 CentOS 7.9。
+- 本节不要重做。下一步学习 Ansible Ad-hoc 命令。
+
+## 当前下一步（最新）
+
+1. 学习 Ansible Ad-hoc 命令。
+2. 再学习 Playbook、变量、模板、handlers 和幂等性。
+
+## 2026-09-16 Ansible Ad-hoc 命令完成
+
+- 已验证 `command` 模块执行 `pwd` 和 `cat`，能读回 `/home/atguigu/ansible-practice` 和 `ansible adhoc ok`。
+- 已验证 `file` 模块创建 `/home/atguigu/ansible-practice/adhoc` 目录，权限 `0755`；第一次 `changed=true`，第二次 `changed=false`，幂等性验证通过。
+- 已验证 `copy` 模块写入 `hello.txt`，权限 `0644`，内容 `ansible adhoc ok`；第一次 `changed=true`，第二次 `changed=false`，幂等性验证通过。
+- 已验证 `stat` 模块确认文件存在、为普通文件、权限为 `0644`。
+- 已用 `file` 模块 `state=absent` 删除练习目录，并用 `stat` 确认 `exists=false`。
+- 本节不要重做。下一步学习 Playbook、变量、模板、handlers 和幂等性。
+
+## 当前下一步（最新）
+
+1. 学习 Ansible Playbook 基础。
+2. 再学习变量、模板、handlers 和幂等性。
+
+## 2026-09-16 Ansible Playbook 基础完成
+
+- 已创建 `~/ansible-practice/site.yml`，使用 `hosts: local`、`connection: local`、`vars` 和 4 个任务。
+- Playbook 任务包括：创建目录、写入文件、读取文件、输出内容。
+- `ansible-playbook -i inventory.ini site.yml --syntax-check` 通过，输出 `playbook: site.yml`。
+- 第一次执行结果：`ok=4 changed=2`，目录和文件被创建，`debug` 输出 `ansible playbook ok`。
+- 第二次执行结果：`ok=4 changed=0`，证明 Playbook 幂等性正常。
+- `stat` 验证 `hello.txt` 存在、为普通文件、权限 `0644`、大小 20 字节。
+- 已用 `file` 模块删除 `playbook-demo` 目录，并用 `stat` 确认 `exists=false`。
+- 本节不要重做。下一步学习变量、模板和 handlers。
+
+## 当前下一步（最新）
+
+1. 学习 Ansible handlers：任务产生变更后用 `notify` 触发服务重启，并验证只在变更时执行。
+2. 再学多主机部署、错误处理和幂等性强化。
+3. 最后完成一键部署 Nginx 和基础配置的 playbook。
+
+## 2026-09-16 Ansible 变量与模板完成
+
+- 变量来源与优先级已验证：inventory 主机变量 / playbook `vars` / facts 与 `register` / 命令行 `-e`，优先级为 inventory/facts -> `vars` -> `-e`。
+- 未定义变量会硬失败：`ansible local -i inventory.ini -m debug -a "msg={{ app_port }}"` 返回 `FAILED!` 和 `'app_port' is undefined`；加 `-e "app_port=18090"` 后返回 `18090`。
+- 已创建 `~/ansible-practice/templates/app.conf.j2` 和 `~/ansible-practice/vars-template.yml`，两个文件保留，作为后续模板与 handlers 的基础。
+- `--syntax-check` 通过；第一次执行 `ok=4 changed=2`（建目录 + 渲染模板）；`cat template-demo/app.conf` 读到渲染后的三行配置；第二次执行 `ok=4 changed=0`，模板幂等性验证通过。
+- 变量覆盖验证：加 `-e "app_port=18091"` 后第一次 `ok=4 changed=1` 且 `debug` 显示 `app_port=18091`，第二次同参数 `ok=4 changed=0`。
+- 已知边界：`--syntax-check` 不校验 Jinja2 模板内容；`debug: var=` 把换行显示成 `\n`；模板相对路径和 `-i` 都依赖当前目录，须先 `cd ~/ansible-practice`。
+- `template-demo` 是本节练习产物，收尾时用 `file` 模块 `state=absent` 删除。
+- 本节不要重做。下一步学习 handlers。

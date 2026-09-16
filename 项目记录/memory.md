@@ -6,7 +6,7 @@
 
 归档位置：`项目记录/memory.md`。
 
-## 当前接续点（2026-09-15 allkeys-lru 小节已完成）
+## 历史接续点（2026-09-15 Redis allkeys-lru 小节；最新进度见文件末尾）
 
 - 2026-09-14 内存基线与运行时上限小节：调整前内存快照：整机 total=1980 MiB、used=936、free=247、buff/cache=796、available=866（约 44%），Swap 2047 MiB、used=0；Redis used_memory=812936 字节（793.88K）、RSS=6045696 字节（5.77M）、碎片率=7.44，maxmemory=0、策略 noeviction。 本次快照未见明显内存压力；小内存实例的高 RSS/used_memory 比率不单独判作泄漏或严重碎片。用户执行 `redis-cli -p 6379 CONFIG SET maxmemory 134217728` 返回 `OK`，随后 CONFIG GET 返回 `maxmemory` 与 `134217728`，确认正式实例运行时上限为 128 MiB。本次只修改 maxmemory，没有修改淘汰策略。 128 MiB 是学习用预算，不是生产通用值、预分配量或进程 RSS 硬上限。
 - `/etc/redis.conf` 第 537 行已写入 `maxmemory 134217728`，修改前备份为 `/etc/redis.conf.before-maxmemory-20260914-165752`。2026-09-14 17:10:21 CST 正式 redis 服务重启后为 `active (running)`，主进程 PID 9261，ExecStop 为 `0/SUCCESS`，仍为 enabled；用户未重新 CONFIG SET，直接 CONFIG GET maxmemory 返回 `134217728`，128 MiB 上限的服务重启加载验收通过。 不再重复 CONFIG SET、文件编辑或服务重启；原运行值 0 和备份保留为回滚参考，未执行回滚、CONFIG REWRITE 或内核参数调整。
@@ -847,3 +847,36 @@ GitHub Actions 或同类流水线，实现测试、构建、镜像或发布、�
 - Web 返回 `HTTP/1.1 200 OK` 和 `Docker Compose success`；Redis 返回 `PONG`，并成功写入、读回 `compose:practice`。
 - 容器、默认网络和练习镜像均已清理，最终 `docker images` 为空；`~/compose-practice` 源文件目录保留。
 - Docker/Compose 阶段 7 节全部完成，不要重做。下一步提交学习记录。
+
+## 2026-09-16 Ansible 安装与 Inventory 完成
+
+- 已在 CentOS 7 上通过 EPEL 安装 Ansible `2.9.27`，控制端 Python 为 `2.7.5`。
+- `/root` 下执行 Ansible 会因目录权限报 `Permission denied: '.'`，切到 `/home/atguigu` 后本机 `ping` 成功。
+- 已创建 `~/ansible-practice/inventory.ini`，定义 `[local]` 组和 `localhost ansible_connection=local`。
+- Inventory 解析、`ansible local -i inventory.ini -m ping`、`setup` 发行版信息筛选均验证成功。
+- 本节不要重做。下一步学习 Ansible Ad-hoc 命令。
+
+## 2026-09-16 Ansible Ad-hoc 命令完成
+
+- 已验证 `command`、`file`、`copy`、`stat` 模块。
+- `file` 创建目录、`copy` 写入文件均验证了幂等性：第一次 `changed=true`，第二次 `changed=false`。
+- 已读取 `hello.txt` 内容 `ansible adhoc ok`，并用 `stat` 确认文件属性。
+- 已用 `file` 模块删除练习目录，并用 `stat` 确认 `exists=false`。
+- 本节不要重做。下一步学习 Ansible Playbook 基础。
+
+## 2026-09-16 Ansible Playbook 基础完成
+
+- 已创建并执行 `~/ansible-practice/site.yml`，包含目录创建、文件写入、文件读取和 `debug` 输出。
+- `--syntax-check` 通过；第一次执行 `ok=4 changed=2`，第二次执行 `ok=4 changed=0`，幂等性验证通过。
+- `stat` 确认 `hello.txt` 存在且权限为 `0644`。
+- 已删除 `playbook-demo` 目录并确认 `exists=false`。
+- 本节不要重做。下一步学习 Ansible 变量和模板。
+
+## 2026-09-16 Ansible 变量和模板完成
+
+- 变量来源与优先级已验证：inventory 主机变量 / playbook `vars` / facts 与 `register` / 命令行 `-e`，优先级为 inventory/facts -> `vars` -> `-e`；未定义变量会让任务直接 `FAILED!`（`'app_port' is undefined`），不是空值。
+- 已创建 `~/ansible-practice/templates/app.conf.j2` 和 `vars-template.yml`；`--syntax-check` 通过，第一次 `ok=4 changed=2`，第二次 `ok=4 changed=0`，`template` 幂等性通过，`cat` 读到渲染后的三行配置。
+- 加 `-e "app_port=18091"` 后第一次 `ok=4 changed=1` 且 debug 显示 18091，第二次 `changed=0`，变量覆盖生效且重复执行不再变更。
+- 已知边界：`--syntax-check` 不校验 Jinja2 模板内容；`debug: var=` 把换行显示成 `\n`；模板相对路径与 `-i` 都依赖当前目录，须先 `cd ~/ansible-practice`。
+- `template-demo` 是练习产物待删除；`templates/` 目录和 `vars-template.yml` 保留。
+- 本节不要重做。下一步学习 Ansible handlers。

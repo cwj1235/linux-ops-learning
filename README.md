@@ -21,7 +21,9 @@ new-chat/
 │   ├── ops_linux_inspection_script.md
 │   ├── ops_git_basics.md
 │   ├── ops_python_basics.md
-│   └── ops_redis_basics.md
+│   ├── ops_redis_basics.md
+│   ├── ops_docker_basics.md
+│   └── ops_ansible_basics.md
 ├── scripts/                  已纳入版本管理的运维脚本
 └── 项目记录/
     ├── memory.md
@@ -47,6 +49,8 @@ new-chat/
 - [Git 基础](学习总结/ops_git_basics.md)
 - [Python 运维脚本](学习总结/ops_python_basics.md)
 - [Redis 基础运维](学习总结/ops_redis_basics.md)
+- [Docker 基础运维](学习总结/ops_docker_basics.md)
+- [Ansible 自动化部署](学习总结/ops_ansible_basics.md)
 
 ### 项目记录
 
@@ -73,6 +77,8 @@ new-chat/
 ```
 
 ## 当前进度
+
+2026-09-16：Ansible 阶段已完成五节——安装与本机连通性、Inventory、Ad-hoc 命令、Playbook 基础、变量与模板。变量来源与优先级（inventory/facts -> playbook `vars` -> 命令行 `-e`）已实测，未定义变量会直接 `FAILED!`；`templates/app.conf.j2` 与 `vars-template.yml` 已完成渲染、幂等（`changed=2` -> `changed=0`）和 `-e` 覆盖（`changed=1` -> `changed=0`）验证。下一步：Ansible handlers。下方 2026-09-14 段落里的“下一步”是 Redis 阶段的历史停点。
 
 2026-09-14：AOF 加载、指定 RDB 隔离回灌、临时实验清理、正式实例 128 MiB 上限及 noeviction 超限行为均已验证。正式 Redis 重启后 maxmemory=134217728、策略为 noeviction，两个练习键可读回；隔离实例 `127.0.0.1:6381` 以 1 MiB 上限实测，前 6 个 65536 字节键写入成功，第 7 个开始返回 OOM 拒写，已有键仍可读，DEL 释放空间后写入恢复。6381 已通过 `SHUTDOWN NOSAVE` 关闭，正式 6379 仍返回 PONG。
 
@@ -106,6 +112,8 @@ Redis 内存上限：128 MiB 已写入配置文件，2026-09-14 17:10 服务重�
 已结束练习：practice:checks、practice:services、practice:priority 均已确认不存在，无需再次清理
 当前练习键：practice:rdb-check 在正常重启后仍读到 rdb-ok，与备份一并保留，尚未清理
 Redis AOF：`appendonly yes` 已写入 `/etc/redis.conf`；`/var/lib/redis/appendonly.aof` 已生成，重启日志确认从 AOF 加载，`practice:aof-check` 读回 `aof-ok`
+Docker 安装、镜像加速、容器生命周期、数据卷、端口映射、Dockerfile 与 Compose 编排：已完成
+Ansible 安装与 Inventory、Ad-hoc 命令、Playbook 基础、变量与模板：已完成
 ```
 
 下一步：只读检查 `/var/lib/redis-noeviction-20260914` 的目录内容，并再次确认 6381 无残留监听；用户确认目录只包含本次实验文件后，再指导安全清理该临时目录。正式 6379 的 128 MiB 上限、练习键和 noeviction 策略均已验收，不再重复设置或重启；配置备份 `/etc/redis.conf.before-maxmemory-20260914-165752` 保留。性能调优、断电恢复和高可用尚未验证，原始数据备份与 AOF 保留。

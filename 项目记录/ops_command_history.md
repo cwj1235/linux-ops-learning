@@ -3842,3 +3842,424 @@ Deleted: ...
 ```
 
 最终 `docker compose ps` 和 `docker images` 均为空；`~/compose-practice` 源文件目录保留。
+
+## 2026-09-16 Ansible 安装与 Inventory 验证
+
+### 环境检查
+
+```bash
+ansible --version
+python3 --version
+yum repolist enabled | grep -iE 'epel|ansible'
+```
+
+关键输出：
+
+```text
+bash: ansible: 未找到命令...
+Python 3.6.8
+epel/x86_64  Extra Packages for Enterprise Linux 7 - x86_64
+```
+
+### 安装并验证
+
+```bash
+sudo yum install -y ansible
+ansible --version
+```
+
+关键输出：
+
+```text
+ansible 2.9.27
+config file = /etc/ansible/ansible.cfg
+python version = 2.7.5
+```
+
+### 本机连通性
+
+```bash
+cd /home/atguigu
+ansible localhost -m ping
+```
+
+关键输出：
+
+```text
+localhost | SUCCESS => changed=false, ping=pong
+```
+
+### Inventory
+
+```bash
+mkdir -p ~/ansible-practice
+cd ~/ansible-practice
+cat > inventory.ini <<'EOF'
+[local]
+localhost ansible_connection=local
+EOF
+```
+
+解析：
+
+```bash
+ansible-inventory -i inventory.ini --list
+```
+
+关键输出：
+
+```text
+localhost 的 hostvars 包含 ansible_connection=local
+all 包含 local 和 ungrouped
+local 包含 localhost
+```
+
+验证：
+
+```bash
+ansible local -i inventory.ini -m ping
+ansible local -i inventory.ini -m setup -a 'filter=ansible_distribution*'
+```
+
+关键输出：
+
+```text
+localhost | SUCCESS => discovered_interpreter_python=/usr/bin/python, changed=false, ping=pong
+ansible_distribution: CentOS
+ansible_distribution_version: 7.9
+```
+
+## 2026-09-16 Ansible Ad-hoc 命令验证
+
+### command 模块
+
+```bash
+ansible local -i inventory.ini -m command -a 'pwd'
+```
+
+关键输出：
+
+```text
+/home/atguigu/ansible-practice
+```
+
+### file 模块创建目录并验证幂等性
+
+```bash
+ansible local -i inventory.ini -m file \
+  -a 'path=/home/atguigu/ansible-practice/adhoc state=directory mode=0755'
+```
+
+第一次关键输出：
+
+```text
+changed=true
+state=directory
+mode=0755
+```
+
+第二次关键输出：
+
+```text
+changed=false
+state=directory
+mode=0755
+```
+
+### copy 模块写入文件并验证幂等性
+
+```bash
+ansible local -i inventory.ini -m copy \
+  -a 'content="ansible adhoc ok" dest=/home/atguigu/ansible-practice/adhoc/hello.txt mode=0644'
+```
+
+第一次关键输出：
+
+```text
+changed=true
+dest=/home/atguigu/ansible-practice/adhoc/hello.txt
+mode=0644
+size=16
+```
+
+第二次关键输出：
+
+```text
+changed=false
+mode=0644
+size=16
+```
+
+### 读取文件和检查状态
+
+```bash
+ansible local -i inventory.ini -m command \
+  -a 'cat /home/atguigu/ansible-practice/adhoc/hello.txt'
+
+ansible local -i inventory.ini -m stat \
+  -a 'path=/home/atguigu/ansible-practice/adhoc/hello.txt'
+```
+
+关键输出：
+
+```text
+ansible adhoc ok
+exists=true
+isreg=true
+mode=0644
+readable=true
+writeable=true
+executable=false
+```
+
+### 清理
+
+```bash
+ansible local -i inventory.ini -m file \
+  -a 'path=/home/atguigu/ansible-practice/adhoc state=absent'
+
+ansible local -i inventory.ini -m stat \
+  -a 'path=/home/atguigu/ansible-practice/adhoc'
+```
+
+关键输出：
+
+```text
+changed=true
+state=absent
+exists=false
+```
+
+## 2026-09-16 Ansible Playbook 基础验证
+
+### 创建 Playbook
+
+```bash
+cd /home/atguigu/ansible-practice
+```
+
+`site.yml` 关键内容：
+
+```yaml
+---
+- name: Practice basic playbook
+  hosts: local
+  connection: local
+  gather_facts: false
+
+  vars:
+    practice_dir: /home/atguigu/ansible-practice/playbook-demo
+    practice_file: "{{ practice_dir }}/hello.txt"
+    practice_content: "ansible playbook ok\n"
+
+  tasks:
+    - name: Create practice directory
+      file:
+        path: "{{ practice_dir }}"
+        state: directory
+        mode: '0755'
+
+    - name: Create practice file
+      copy:
+        content: "{{ practice_content }}"
+        dest: "{{ practice_file }}"
+        mode: '0644'
+
+    - name: Read practice file
+      command: "cat {{ practice_file }}"
+      register: file_content
+      changed_when: false
+
+    - name: Show practice file content
+      debug:
+        var: file_content.stdout
+```
+
+### 语法检查
+
+```bash
+ansible-playbook -i inventory.ini site.yml --syntax-check
+```
+
+关键输出：
+
+```text
+playbook: site.yml
+```
+
+### 第一次执行
+
+```bash
+ansible-playbook -i inventory.ini site.yml
+```
+
+关键输出：
+
+```text
+TASK [Create practice directory] changed
+TASK [Create practice file] changed
+TASK [Read practice file] ok
+TASK [Show practice file content] ok
+
+PLAY RECAP
+localhost : ok=4 changed=2 unreachable=0 failed=0
+```
+
+### 第二次执行，验证幂等性
+
+```bash
+ansible-playbook -i inventory.ini site.yml
+```
+
+关键输出：
+
+```text
+TASK [Create practice directory] ok
+TASK [Create practice file] ok
+TASK [Read practice file] ok
+TASK [Show practice file content] ok
+
+PLAY RECAP
+localhost : ok=4 changed=0 unreachable=0 failed=0
+```
+
+### 文件状态验证
+
+```bash
+ansible local -i inventory.ini -m stat \
+  -a 'path=/home/atguigu/ansible-practice/playbook-demo/hello.txt'
+```
+
+关键输出：
+
+```text
+exists=true
+isreg=true
+mode=0644
+size=20
+```
+
+### 清理
+
+```bash
+ansible local -i inventory.ini -m file \
+  -a 'path=/home/atguigu/ansible-practice/playbook-demo state=absent'
+
+ansible local -i inventory.ini -m stat \
+  -a 'path=/home/atguigu/ansible-practice/playbook-demo'
+```
+
+关键输出：
+
+```text
+changed=true
+state=absent
+exists=false
+```
+
+## 2026-09-16 Ansible 变量与模板验证
+
+### 变量来源与优先级
+
+```bash
+cd /home/atguigu/ansible-practice
+ansible local -i inventory.ini -m debug -a "msg={{ app_port }}" -e "app_port=18090"
+ansible local -i inventory.ini -m debug -a "msg={{ app_port }}"
+```
+
+关键输出：
+
+```text
+localhost | SUCCESS => { "msg": "18090" }
+localhost | FAILED! => { "msg": "The task includes an option with an undefined variable. The error was: 'app_port' is undefined" }
+```
+
+结论：命令行 `-e` 传的变量优先级高于 playbook `vars`；未定义变量会直接让任务失败，不会当成空字符串。
+
+### 创建模板与 Playbook
+
+```bash
+cd /home/atguigu/ansible-practice
+mkdir -p templates
+cat > templates/app.conf.j2 <<'EOF'
+# Managed by Ansible
+app_name={{ app_name }}
+app_port={{ app_port }}
+app_owner={{ app_owner }}
+EOF
+
+cat > vars-template.yml <<'EOF'
+---
+- name: Practice variables and template
+  hosts: local
+  connection: local
+  gather_facts: false
+
+  vars:
+    app_name: demo-app
+    app_port: 18090
+    app_owner: atguigu
+    practice_dir: /home/atguigu/ansible-practice/template-demo
+    config_file: "{{ practice_dir }}/app.conf"
+
+  tasks:
+    - name: Create template practice directory
+      file:
+        path: "{{ practice_dir }}"
+        state: directory
+        mode: '0755'
+
+    - name: Render app config
+      template:
+        src: templates/app.conf.j2
+        dest: "{{ config_file }}"
+        mode: '0644'
+
+    - name: Read app config
+      command: "cat {{ config_file }}"
+      register: app_config
+      changed_when: false
+
+    - name: Show app config
+      debug:
+        var: app_config.stdout
+EOF
+```
+
+说明：`<<'EOF'` 的单引号保留原样写入，`{{ }}` 才会交给 Jinja2 渲染。
+
+### 语法检查、渲染与幂等
+
+```bash
+ansible-playbook -i inventory.ini vars-template.yml --syntax-check
+ansible-playbook -i inventory.ini vars-template.yml
+cat /home/atguigu/ansible-practice/template-demo/app.conf
+ansible-playbook -i inventory.ini vars-template.yml
+```
+
+关键输出：
+
+```text
+语法检查：playbook: vars-template.yml
+第一次  ：ok=4 changed=2 unreachable=0 failed=0
+cat     ：# Managed by Ansible / app_name=demo-app / app_port=18090 / app_owner=atguigu
+第二次  ：ok=4 changed=0 unreachable=0 failed=0
+```
+
+结论：`template` 模块按模板渲染生成配置文件；第二次内容一致，返回 `changed=0`，幂等性成立。
+
+### 命令行变量覆盖模板内容
+
+```bash
+ansible-playbook -i inventory.ini vars-template.yml -e "app_port=18091"
+ansible-playbook -i inventory.ini vars-template.yml -e "app_port=18091"
+```
+
+关键输出：
+
+```text
+第一次：ok=4 changed=1，debug 显示 app_port=18091
+第二次：ok=4 changed=0
+```
+
+结论：`-e` 覆盖 playbook 内变量后渲染结果随之变化；同一组变量值重复执行不再产生变更。
