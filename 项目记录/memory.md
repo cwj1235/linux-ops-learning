@@ -43,7 +43,6 @@
 - `CONFIG SET appendonly yes` 返回 `OK`，INFO 显示 `aof_enabled:1`、重写未进行、最近重写与写入状态均为 `ok`；AOF 文件生成，大小 139 字节。`CONFIG REWRITE` 因 Redis 用户无 `/etc` 目录写权限返回 `Permission denied`，随后管理员用 `sed` 将 `/etc/redis.conf` 第 593 行改为 `appendonly yes`，完成磁盘配置持久化。
 - 写入 `practice:aof-check=aof-ok` 后重启，GET 返回 `aof-ok`；启动日志明确显示 `DB loaded from append only file`，确认 AOF 恢复。指定 RDB 恢复、具体键值与临时实例关闭均已验证；临时目录亦已清理；三项启动警告已完成只读核验；内存基线和 128 MiB 运行值也已验证；128 MiB 上限已写入配置文件并备份，服务重启后的加载验收也已通过；本轮重启后的两个练习字符串键与 noeviction 策略也已读回。当时“先检查 6381”的停点已经完成，后续 noeviction、allkeys-lru 超限演练和最终清理也已收尾；下一步优先做 `volatile-lru` 隔离实验，再评估内核参数调整、故障与巡检集成，最后进入 Docker/Compose；保留 CentOS 7 隔离实验环境，不暴露旧版 Redis 到公网。
 - 本地此前漏记了 9 月 12 日晚的 Redis 课程；现已补入 `学习总结/ops_redis_basics.md`、命令履历、交接和首页。Python 归档后的记录提交 `22b3b24` 也有用户成功推送及 clean 输出，不需要重复完成旧步骤。
-- 模型切换是独立支线：用户已于 9 月 12 日返回 `diagnose` 结果“任务列表在检查期间发生变化，请关闭其他配置工具后重试”，不是仍在等待诊断输出。错误尚未修复、真实全局切换未验收；本次不修改全局配置或工具，也不让它打断 Redis 主线。
 
 ## 2026-09-13 项目文件全文复核
 
@@ -64,6 +63,7 @@
 - 固定节奏：概念 → 命令 → 用户执行 → 解释输出 → 总结 → 下一步。
 - 每次优先给 1～3 条命令，避免一次堆太多内容。
 - 响应偏好（2026-09-13 明确）：希望更快回复，但不缩短讲解或降低准确性。减少不必要的重复查阅，保留必要核对；依据实际输出区分已验证、待验证和推测，不编补缺失结果，也不为提速提前推进。
+- 响应偏好（2026-09-17 明确）：给答复和教学内容前要先认真思考，不要不思考就快速给答案；先判断真实状态、说明判断依据，明确区分已验证、待验证和推测，宁可先把判断过程讲清楚，也不要给泛泛的即时回答。
 - 每条命令解释用途、语法和参数。
 - 用户问“什么意思”时，先暂停进度并解释清楚。
 - 用户发回命令输出后，必须根据真实结果判断状态，不能假设执行成功。
@@ -728,63 +728,6 @@ GitHub Actions 或同类流水线，实现测试、构建、镜像或发布、�
 - 最终工作区干净，本地 `main` 与 `origin/main` 同步。
 - Python 脚本和完整学习记录已纳入 GitHub；日志文件因 `*.log` 规则仍不纳入版本库。
 
-## 2026-09-12 Codex 模型菜单排查
-
-- 全局 `~/.codex/config.toml` 的模型标识为 `gpt-6-astra`，接入方为 `AnyRouter`，推理强度为 `high`；当前会话记录一致。这只能确认客户端调用标识，不能验证第三方后端真实型号。
-- 使用本机 `0.153.0-alpha.5` app-server 在临时独立 `CODEX_HOME` 中验证：不加载自定义目录时，`model/list` 仍返回内置的 GPT-5.6 Sol/Terra/Luna、GPT-5.5、GPT-5.2，不包含 `gpt-6-astra`。
-- 全局配置未设置 `model_catalog_json`；已有 `~/.codex/cc-switch-model-catalog.json` 只有 `gpt-5.6-sol`，隔离加载后列表也只有该项。目录缺项已复现，但该结果只涉及模型列表，不证明能够跨服务商切换。
-- 本次未修改全局配置、认证信息或既有任务；运维课程进度不变。
-
-## 2026-09-12 Codex 多服务商约束修正
-
-- 用户明确说明 `gpt-5.6-sol` 与 `gpt-6-astra` 使用不同的服务商地址、密钥和其他设置；不能仅合并模型目录后就假定可以正确切换。
-- 本机配置已存在 `agentrouter`、`AnyRouter` 两个独立 provider 段，当前选中 `AnyRouter`；未输出或复制凭据。随后只读检查近期会话元数据，观察到 `agentrouter` 与 `gpt-5.6-sol` 配对、`AnyRouter` 与 `gpt-6-astra` 配对。
-- 修复应保持模型与对应 provider、目录及参数成套匹配；`model_catalog_json` 本身不负责按模型切换地址或密钥。全局默认切换也不能保证迁移所有既有任务。
-- 已安装版本的协议在任务启动、恢复时有独立的 `modelProvider` 字段；尚未验证桌面界面是否暴露按任务选择服务商的入口。
-
-## 2026-09-12 Codex 全局切换需求与隔离验证
-
-- 用户明确要求全局统一：选用 `gpt-6-astra` 时全部项目、会话都能使用它；切到 `gpt-5.6-sol` 时同样全部可用，不要求不同会话同时使用不同服务商。
-- 在临时独立 `CODEX_HOME` 中使用合成会话验证：全局从模型/服务商 A 改为 B 后，新会话采用 B，但直接恢复旧会话仍采用原来的 A。不能承诺只改全局配置、重启即可同步所有旧会话。
-- 已验证可持久化的路径：以目标 `model`、`modelProvider` 调用 `thread/resume`，再调用 `thread/settings/update` 保存目标模型及推理强度；关闭并重启测试 app-server 后，不带覆盖参数恢复该旧会话仍得到 B。没有删除会话历史，也未调用真实服务商。
-- 后续全局切换方案应同时更新默认模型/服务商和既有会话设置，模型目录只负责菜单显示。执行前需备份、停止运行中的任务，并验证目标范围及回退方式；不要直接改写真实会话日志或数据库。
-- 本次只修改项目记录，未执行真实全局切换。全局 `.codex` 当前不可写；如生成切换工具，应在可写目录准备并隔离验证，再由用户明确执行。
-- 用户要求在执行前明确说明修改哪些文件、目录及其影响，区分已完成的记录/隔离测试与尚未实施的全局变更。不要把方案确认当作已执行切换。
-
-## 2026-09-12 Codex 全局切换工具准备完成
-
-- 工具已确认安装在 `C:\Users\陈伟钜\.codex\model-switch`，入口 `switch_model.py`，中文说明 `README.md`。用户要求长期工具不能只放 `%TEMP%`，应与 Codex 配置放在一起，不再采用 `D:\tools`，不混入运维项目代码。三个核心 Python 模块的 SHA256 与隔离测试通过的版本一致，固定目录只读预览通过；清理临时副本 `D:\temp\codex-global-model-switch` 不影响正式安装。
-- 确认固定目录复制完成后，在 PowerShell 运行 `python "$HOME\.codex\model-switch\switch_model.py" astra` 仅预览。待所有任务结束、完全退出 Codex 桌面和 CLI 后，在独立 PowerShell 中加 `--apply` 执行；`sol --apply` 切到另一套，`restore --apply` 恢复最近完成的备份。复制工具本身不要求退出 Codex，不会触发模型切换。
-- 实际修改用户级 `.codex/config.toml` 的模型/provider/推理强度/目录引用及默认服务等级、`.codex/custom-models.json`，通过原生接口更新本机已保存交互会话（含归档）。不改 provider 地址或凭据，不直接编辑 SQLite/JSONL，不发送模型回合，不改项目源代码。
-- 备份留在用户级 `.codex/model-switch-backups`；原配置可能含凭据，不能上传或纳入 Git。遇到项目模型或 provider 覆盖、配置竞争、程序仍在运行、运行时版本不符时停止，不擅自改项目配置。
-- 最终版本在合成配置、占位凭据和 3 个临时会话中通过 Astra/Sol 往返与双次恢复、归档保留、历史正文及权限不变、失败自动回退、并发保护、损坏备份拒绝和 TOML 保留验证；模型目录接口、Python 编译与两个 PowerShell 入口预览通过。
-- 最新只读检查：全局组合为 `gpt-6-astra` / `AnyRouter`，未发现切换锁或正式备份目录。助手未执行真实 `--apply`，不能把当前默认组合当作所有旧任务已同步；当前权限只允许读取全局 `.codex`，用户需退出应用后手动执行。桌面重启后的菜单显示及真实服务商推理尚未验证；工具只针对本机，排除云端、其他主机及代理内部任务，锁定 Codex `0.153.0-alpha.5`。
-- 新需求：用户说明 Agentrouter 还提供 `glm-5.3`、DeepSeek 等模型，希望切到该服务商后也能使用它们。当前安装工具只有 `astra` / `sol` 两个固定组合，且生成单模型目录，尚不支持此需求；不能把未实现的新模型参数当成可执行命令。
-- 用户提供的 Agentrouter 模型列表截图中，五个标识为 `gpt-5.6-sol`、`claude-opus-4-8`、`claude-opus-5`、`deepseek-v4-flash`、`glm-5.3`。这是服务商列出的调用标识，不证明真实后端型号；截图上的 `openai` / `anthropic` 标签不足以确认 Responses 和工具调用兼容性。
-- 用户最终缩小范围：Agentrouter 只在 `gpt-5.6-sol` 之外增加 `glm-5.3`，不加入 Claude、DeepSeek；AnyRouter 只保留 `gpt-6-astra`，原有行为不改。该范围已经明确，不再反复询问全套多模型方案。
-
-## 2026-09-12 Agentrouter GLM 更新包完成，用户预览通过
-
-- 更新源码及 ZIP 曾暂存于 `C:\Users\陈伟钜\.codex\visualizations\2026\09\12\01a0944e-1a2f-7dd0-ab46-3b4af6d85242`。正式安装校验后，这些重复副本已按用户要求清理；后续直接使用正式目录，不再执行旧安装或清理命令。
-- 新版保留 `astra` / `sol` / `restore`，新增 `glm`。`sol --apply` 使用 Agentrouter + GPT 并生成 Sol/GLM 双模型菜单；`glm --apply` 批量统一为 Agentrouter + GLM；`astra --apply` 仍为 AnyRouter + Astra 单模型菜单。右下角选模型不是批量同步；当前桌面版本是否另外将菜单选择写回全局默认尚未做实际前后对比，不能据此断言 `config.toml` 一定不变。
-- AnyRouter/Astra 的目录字节和配置写入行为与旧版对比一致。GLM 采用客户端 `none` 档位、文本输入和 32768 token 预算（实际有效 31129）；这是保守客户端设置，不是服务商能力认证，历史不会被删除但可能触发上下文压缩。
-- 本地模拟接口验证表明 Codex 仍发送 `reasoning.effort=none`、`summary=auto` 和 `parallel_tool_calls=true`；不能声称目录声明会移除这些字段。已验证本地 Responses 文本回复、动态函数调用及工具结果回传，尚未调用真实 Agentrouter/GLM 接口。
-- 三个合成任务含归档已通过 Sol/GLM/Astra 往返及逐次恢复、GLM 注入失败回退、消息及工具调用/结果保存、权限和 provider 数据保留。三个目录的默认项、Python 编译、PowerShell 入口、ZIP 安装模拟和旧工具备份校验通过。
-- 正式安装目录 `C:\Users\陈伟钜\.codex\model-switch` 对助手仍只读。用户已贴出新版预览结果：当前全局为 `gpt-6-astra` / `AnyRouter`，目标为 `glm-5.3` / `agentrouter`，能列出 Agentrouter 的 Sol/GLM 双模型菜单；输出明确为“仅预览”，未改配置、未迁移任务。不能据此声称已经实际切换或全部任务已同步。
-- 用户再次强调只在原有 Agentrouter 菜单增加 GLM 选项，不需要全局改成 GLM，也不需要继续扩展工具。后续要使用 Agentrouter 时沿用 `sol --apply`，默认仍为 Sol，并生成双模型菜单；仅在用户明确要所有任务统一使用 GLM 时才引导 `glm --apply`。继续使用 AnyRouter 时无需执行切换命令。
-
-## 2026-09-12 正式安装验收与残留清理完成
-
-- 已只读核对正式目录 `C:\Users\陈伟钜\.codex\model-switch` 的 7 个交付文件，SHA256 全部与更新源码一致；正式入口 `python -B ...\switch_model.py sol` 预览通过，列出 Sol/GLM 双模型菜单。工具更新已经安装完整，但当前全局仍为 `gpt-6-astra` / `AnyRouter`，未验证真实 GLM 调用，也未确认用户执行过全局切换。
-- 用户已返回清理成功输出：删除 `D:\temp` 下本次生成的 41 个测试/旧源码目录、更新源码副本及 ZIP，共 43 项、3411 个文件、约 106.9 MiB；一次性清理脚本也已自删。脚本完成后验证正式工具和全局配置未变。随后只读确认更新源码、ZIP、清理脚本和旧临时工具均不存在，正式目录 7 个交付文件齐全。
-- 保留正式工具、唯一旧版备份 `C:\Users\陈伟钜\.codex\model-switch-code-backup-20260912-180735`、真实配置、密钥、聊天记录和用户截图。备份存在已只读确认；后续无需重复清理或重新生成安装包。
-- 清理曾受权限阻碍：助手删除命令被沙盒拒绝，普通用户 PowerShell 又无法枚举沙盒账户拥有的受保护测试目录。已指导用户在管理员 PowerShell 运行限定路径的脚本，并收到成功结果；没有修改目录所有者或 ACL，也没有对整个临时目录放宽权限。
-
-## 2026-09-12 首次真实切换预检失败，等待具体诊断
-
-- 用户执行 `sol --apply` 后停在“读取全部已保存交互会话设置”，旧脚本只输出通用错误，不能据此判断根因。只读确认全局仍为 `gpt-6-astra` / `AnyRouter`，没有正式切换备份目录；当前桌面和工具固定运行时均为 `0.153.0-alpha.5`。尚未修复或验证真实切换，不得报告全局同步成功。
-- 获准仅修改正式目录的 `switch_model.py`、`runtime_client.py`、`README.md` 后，已原位补上失败阶段、接口名称、错误码及安全分类；不输出原始 RPC 响应或日志。新增 `python -B "C:\Users\陈伟钜\.codex\model-switch\switch_model.py" diagnose`，只初始化接口和读取任务列表，不恢复任务、不解除归档、不切换模型，可在桌面打开时由用户执行；拒绝与 `--apply` 合用。
-- 内存语法及 18 项模拟检查通过，覆盖预检归档恢复、诊断不执行模型/归档变更和凭据内容不泄露；尚未运行新的真实服务诊断。下一步只需用户返回 `diagnose` 输出以定位实际失败，不应继续盲目执行真实切换、扩展功能或生成更新包。用户明确反馈排查太慢，后续应缩小排查范围、给出最短可执行步骤。
 ## 2026-09-15 Redis volatile-lru 小节完成
 
 - 已在 `127.0.0.1:6381` 使用独立目录 `/var/lib/redis-volatile-lru-20260915` 完成 `volatile-lru` 隔离演练。
@@ -880,3 +823,12 @@ GitHub Actions 或同类流水线，实现测试、构建、镜像或发布、�
 - 已知边界：`--syntax-check` 不校验 Jinja2 模板内容；`debug: var=` 把换行显示成 `\n`；模板相对路径与 `-i` 都依赖当前目录，须先 `cd ~/ansible-practice`。
 - `template-demo` 是练习产物待删除；`templates/` 目录和 `vars-template.yml` 保留。
 - 本节不要重做。下一步学习 Ansible handlers。
+
+## 2026-09-17 Ansible handlers 完成
+
+- handler 机制已验证：任务 `changed` 且 `notify` 才入队；handler 在所有任务结束后执行；无变更时不出现 `RUNNING HANDLER`。三次结果：首次 `ok=4 changed=3`、无改动 `ok=3 changed=0`、`-e app_port=18092` 时 `ok=4 changed=2`。
+- 排查到真实 bug：handler 用 `command` 模块做 `>>` 重定向时任务报 `changed` 却不生成文件。对照实验证明 `command` 不经过 shell、`>>` 只是普通参数；`shell` 模块才真正重定向（生成 12 字节 `redir-shell.txt`）。
+- 修复命令 `sed -i 's/command:/shell:/' handlers-demo.yml`，复验通过：修复后 `handler.log` 出现 1 行，无改动再跑无 handler，`-e app_port=18091` 再触发后累计 2 行。
+- 关键结论：`changed` 不证明副作用发生；判断 handler 是否执行看有没有 `RUNNING HANDLER` 段落；生产 handler 应使用 `systemd` 等模块而非 shell 重定向。
+- 保留复用文件 `handlers-demo.yml`、`templates/app.conf.j2`、`handlers-demo/`；练习残留 `redir-shell.txt` 待清理。
+- 本节不要重做。下一步：真实服务重启（Nginx reload）。

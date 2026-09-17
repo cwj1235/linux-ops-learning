@@ -4263,3 +4263,105 @@ ansible-playbook -i inventory.ini vars-template.yml -e "app_port=18091"
 ```
 
 结论：`-e` 覆盖 playbook 内变量后渲染结果随之变化；同一组变量值重复执行不再产生变更。
+
+## 2026-09-17 Ansible handlers 验证
+
+### 创建 handlers 练习 Playbook
+
+```bash
+cd /home/atguigu/ansible-practice
+cat > handlers-demo.yml <<'EOF'
+---
+- name: Practice handlers
+  hosts: local
+  connection: local
+  gather_facts: false
+
+  vars:
+    app_name: demo-app
+    app_port: 18090
+    app_owner: atguigu
+    practice_dir: /home/atguigu/ansible-practice/handlers-demo
+    config_file: "{{ practice_dir }}/app.conf"
+
+  tasks:
+    - name: Create practice directory
+      file:
+        path: "{{ practice_dir }}"
+        state: directory
+        mode: '0755'
+
+    - name: Render app config
+      template:
+        src: templates/app.conf.j2
+        dest: "{{ config_file }}"
+        mode: '0644'
+      notify: write handler log
+
+    - name: Show config ready
+      debug:
+        msg: "config prepared: {{ config_file }}"
+
+  handlers:
+    - name: write handler log
+      command: "echo handler triggered >> {{ practice_dir }}/handler.log"
+EOF
+```
+
+### 触发与不触发验证
+
+```bash
+ansible-playbook -i inventory.ini handlers-demo.yml
+ansible-playbook -i inventory.ini handlers-demo.yml
+ansible-playbook -i inventory.ini handlers-demo.yml -e "app_port=18092"
+```
+
+关键输出：
+
+```text
+第一次    ：ok=4 changed=3，出现 RUNNING HANDLER [write handler log] changed
+第二次    ：ok=3 changed=0，完全没有 RUNNING HANDLER 段落
+第三次 -e ：ok=4 changed=2，再次出现 RUNNING HANDLER
+cat handler.log：没有那个文件或目录
+```
+
+### command 与 shell 重定向对照实验
+
+```bash
+ansible local -i inventory.ini -m command -a 'echo command测试 >> /home/atguigu/ansible-practice/redir-command.txt'
+ansible local -i inventory.ini -m shell   -a 'echo shell测试 >> /home/atguigu/ansible-practice/redir-shell.txt'
+ls -l /home/atguigu/ansible-practice/redir-* ; ls -la /home/atguigu/ansible-practice/handlers-demo/
+```
+
+关键输出：
+
+```text
+command：localhost | CHANGED | rc=0 >> command测试 >> /home/atguigu/ansible-practice/redir-command.txt
+shell  ：localhost | CHANGED | rc=0 >>（无 stdout 输出）
+ls     ：只有 redir-shell.txt，12 字节；redir-command.txt 不存在
+ls -la ：handlers-demo 目录只有 app.conf（72 字节），没有 handler.log
+```
+
+结论：`command` 模块不经过 shell，`>>` 被当作普通参数传给 `echo`，重定向不生效但退出码仍为 0，因此任务报 `changed` 却没有生成文件。
+
+### 修复为 shell 并复验
+
+```bash
+grep -n 'command:' handlers-demo.yml && sed -i 's/command:/shell:/' handlers-demo.yml && grep -n 'shell:' handlers-demo.yml
+ansible-playbook -i inventory.ini handlers-demo.yml
+cat /home/atguigu/ansible-practice/handlers-demo/handler.log
+ansible-playbook -i inventory.ini handlers-demo.yml
+ansible-playbook -i inventory.ini handlers-demo.yml -e "app_port=18091"
+cat /home/atguigu/ansible-practice/handlers-demo/handler.log
+```
+
+关键输出：
+
+```text
+修复后第一次 cat ：handler triggered（1 行）
+无改动再跑一次   ：ok=3 changed=0，无 RUNNING HANDLER
+-e app_port=18091：ok=4 changed=2，出现 RUNNING HANDLER
+最后 cat         ：handler triggered 两行，追加写入生效
+```
+
+结论：handler 只在任务真正产生变更时执行；判断依据是输出里有没有 `RUNNING HANDLER`；`changed` 不证明副作用发生。

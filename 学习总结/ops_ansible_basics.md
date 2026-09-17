@@ -606,10 +606,75 @@ app_owner=atguigu
 - `template-demo` 是本节练习产物，收尾时用 `file` 模块 `state=absent` 删除。
 - 本节不要重做。
 
-## 六、后续学习与验收
+## 六、handlers（已完成）
 
-1. 学习 handlers：任务产生变更后用 `notify` 触发服务重启，并验证只在变更时执行。
+### 概念
+
+- `notify` 写在任务里，写的是 handler 的**名字**，名字必须和 handler 完全一致；写错不报错，但永远不触发。
+- `handlers` 是单独一段，只有任务报 `changed` 且 notify 了它时才入队。
+- handler 在整个 play 的所有 task 跑完之后才执行；多个任务 notify 同一个 handler 只执行一次。
+- 任务 `changed=false` 时不入队，handler 完全不执行，输出里也不会出现 `RUNNING HANDLER` 段落。
+- 前面的任务失败时 handler 默认不执行，除非加 `--force-handlers`；想在 play 中途触发要用 `meta: flush_handlers`。
+
+### 练习 Playbook
+
+`handlers-demo.yml` 关键结构：
+
+```yaml
+tasks:
+  - file 模块：创建 {{ practice_dir }} 目录
+  - template 模块：渲染 app.conf，并 notify: write handler log
+  - debug 模块：打印 "config prepared: {{ config_file }}"
+
+handlers:
+  - name: write handler log
+    shell: "echo handler triggered >> {{ practice_dir }}/handler.log"
+```
+
+### 执行结果
+
+```text
+第一次（建目录 + 渲染）    : ok=4 changed=3，出现 RUNNING HANDLER [write handler log]
+第二次（无任何改动）      : ok=3 changed=0，完全不出现 RUNNING HANDLER
+第三次（-e app_port=18092）: ok=4 changed=2，handler 再次触发
+修好重定向后重跑          : handler.log 出现第 1 行
+无改动再跑一次            : ok=3 changed=0，无 handler
+-e app_port=18091         : ok=4 changed=2，handler 触发，handler.log 累计 2 行
+```
+
+### command 与 shell 的重定向差异（本节排查结论）
+
+最初用 `command` 写日志时，handler 报 `changed` 但文件不存在。对照实验：
+
+```bash
+ansible local -i inventory.ini -m command -a 'echo command测试 >> /home/atguigu/ansible-practice/redir-command.txt'
+ansible local -i inventory.ini -m shell   -a 'echo shell测试 >> /home/atguigu/ansible-practice/redir-shell.txt'
+```
+
+关键结果：
+
+```text
+command：stdout 原样输出 "command测试 >> /home/atguigu/ansible-practice/redir-command.txt"，redir-command.txt 不存在
+shell  ：redir-shell.txt 生成，12 字节，内容为 shell测试
+```
+
+结论：
+
+- `command` 模块不经过 shell，`>>`、`|`、`;` 会被当成普通参数，重定向不生效，但退出码仍为 0，所以任务照样报 `changed`。
+- `shell` 模块经过 shell，重定向生效。
+- **`changed` 只表示任务执行过了，不证明副作用真的发生**；要确认结果必须自己查文件、状态或日志。
+
+### 小节结论
+
+- handler 的触发条件是「任务真的改了系统」，不是「任务里写了 notify」。
+- 判断 handler 有没有执行，看输出里有没有 `RUNNING HANDLER` 段落，而不是看 handler 自己的 changed。
+- 生产里 handler 应使用模块（例如 `systemd: name=nginx state=reloaded`），不要用 shell 重定向。
+- 本节不要重做。
+
+## 七、后续学习与验收
+
+1. 把 handler 换成真实服务：配置变化时用 `systemd` 模块 reload/restart Nginx，并验证「配置没变就不重启」。
 2. 继续强化幂等性、多主机部署和错误处理。
 3. 最终完成一键部署 Nginx/基础配置的 playbook。
 
-当前 Ansible 安装、本机连通性、Inventory、Ad-hoc 命令、Playbook 基础和变量与模板均已完成，后续不要重做。
+当前 Ansible 安装、本机连通性、Inventory、Ad-hoc 命令、Playbook 基础、变量与模板、handlers 均已完成，后续不要重做。

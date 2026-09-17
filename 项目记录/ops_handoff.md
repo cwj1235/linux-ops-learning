@@ -141,6 +141,7 @@ redis-cli CONFIG GET appendfsync
 - 我是纯小白，不要默认我懂。
 - 一次不要给太多命令，最好 1 到 3 条。
 - 回复要更快，但不要因此缩短讲解、跳过必要核对或乱给信息；减少不必要的重复查阅，明确区分已验证、待验证与推测。这是用户于 2026-09-13 补充强调的偏好。
+- 用户于 2026-09-17 进一步明确：每次答复和教学内容都要先认真思考再给，不要不思考就给答案；先说明判断依据和不确定的地方，再给结论和命令，不接受泛泛的即时回答。
 - 等我执行完、确认懂了，再进入下一步。
 - 每个命令都要解释语法、参数、作用。
 - 我问“什么意思”时，先停下来解释，不要继续往后推。
@@ -1737,7 +1738,7 @@ Linux 运维强化基础检查已经完成。下一步可先做一次阶段复�
 
 ## 当前下一步（最新）
 
-1. 学习 Ansible handlers：任务产生变更后用 `notify` 触发服务重启，并验证只在变更时执行。
+1. 把 handler 换成真实服务：用 `systemd` 模块在配置变化时 reload/restart Nginx，并验证「配置没变就不重启」。
 2. 再学多主机部署、错误处理和幂等性强化。
 3. 最后完成一键部署 Nginx 和基础配置的 playbook。
 
@@ -1751,3 +1752,14 @@ Linux 运维强化基础检查已经完成。下一步可先做一次阶段复�
 - 已知边界：`--syntax-check` 不校验 Jinja2 模板内容；`debug: var=` 把换行显示成 `\n`；模板相对路径和 `-i` 都依赖当前目录，须先 `cd ~/ansible-practice`。
 - `template-demo` 是本节练习产物，收尾时用 `file` 模块 `state=absent` 删除。
 - 本节不要重做。下一步学习 handlers。
+
+## 2026-09-17 Ansible handlers 完成
+
+- handler 机制已实测：任务报 `changed` 且写了 `notify` 才入队；handler 在所有 task 结束后执行；无变更时完全不出现 `RUNNING HANDLER`。
+- 三次执行结果：第一次 `ok=4 changed=3`（建目录 + 渲染 + handler），无改动第二次 `ok=3 changed=0`，`-e app_port=18092` 第三次 `ok=4 changed=2`。
+- 排查并定位了一个真实 bug：handler 用 `command` 模块写 `>>` 重定向时，任务报 `changed` 但文件不生成。对照实验证明 `command` 不经过 shell，`>>` 被当成普通参数；`shell` 模块才会真正重定向（`redir-shell.txt` 12 字节生成）。
+- 修复方式：`sed -i 's/command:/shell:/' handlers-demo.yml`，随后复验通过——修复后 `handler.log` 出现第 1 行，无改动再跑 `changed=0` 且无 handler，`-e app_port=18091` 再触发后追加到 2 行。
+- 重要结论：`changed` 只表示任务执行过了，不证明副作用真的发生；判断 handler 是否执行要看有没有 `RUNNING HANDLER` 段落。
+- 生产写法应使用模块而非 shell 重定向，例如 `systemd: name=nginx state=reloaded`；这是下一节要做的。
+- 保留下一步要复用的文件：`handlers-demo.yml`、`templates/app.conf.j2`、`handlers-demo/`；练习残留 `redir-shell.txt` 可清理。
+- 本节不要重做。下一步：真实服务重启（Nginx reload）。
