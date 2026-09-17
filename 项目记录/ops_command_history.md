@@ -4513,7 +4513,36 @@ semanage port -d   ：无输出（撤销成功）
 
 （撤销后未再运行 `sudo semanage port -l | grep http_port_t` 确认；本次以 `semanage port -d` 无报错视为成功。）
 
-### 本节尚未单独复验
+### 补充：给 playbook 加自检（meta: flush_handlers + wait_for）
 
-- 18099 路径在清理前未单独做「无改动重跑」复验；但同一 playbook 在 `-e nginx_demo_port=8008` 的第二次执行已实测 `ok=3 changed=0` 且无 RUNNING HANDLER，模板与 handler 完全一致。
-- 撤销 18099 端口标签后，按默认变量重跑预期会再次被 SELinux 拒绝，未实测。
+`handlers-nginx.yml` 重写为：template（notify）→ `command: /usr/sbin/nginx -t`（changed_when: false）→ debug → **`meta: flush_handlers`** → **`wait_for`（host/port/state=started/timeout=5）**；handler 仍为 `systemd: name=nginx state=reloaded`。
+
+```bash
+cd /home/atguigu/ansible-practice
+cat > handlers-nginx.yml <<'EOF'
+（完整内容见学习总结「补充：给 playbook 加自检」小节）
+EOF
+ansible-playbook -i inventory.ini handlers-nginx.yml --syntax-check
+ansible-playbook -i inventory.ini handlers-nginx.yml -K
+ansible-playbook -i inventory.ini handlers-nginx.yml -e "nginx_demo_port=8008" -K
+ss -lntp | grep 8008 ; curl -sS http://127.0.0.1:8008 ; echo ; pgrep -a nginx
+```
+
+```text
+syntax-check            ：playbook: handlers-nginx.yml
+默认 18099              ：ok=4 changed=2 unreachable=0 failed=1
+                          RUNNING HANDLER 出现在输出中间（flush_handlers 生效的签名）
+                          Verify demo port 失败：{"changed": false, "elapsed": 5,
+                            "msg": "Timeout when waiting for 127.0.0.1:18099"}
+-e nginx_demo_port=8008 ：ok=5 changed=2 unreachable=0 failed=0，Verify 通过
+ss                      ：LISTEN 127.0.0.1:8008
+curl                    ：handler demo ok, version=1
+pgrep                   ：1314 nginx: master process；worker 12412/12413/12414/12415
+```
+
+结论：两次 `changed` 完全相同（2），只有 `failed` 不同（1 → 0）。`changed` 表示「做了动作」，`failed` 表示「结果对不对」。把业务面验证（`wait_for`）写进 playbook 后，SELinux 拒绑会在 5 秒内自动报错，不再需要人工翻日志。
+
+### 本节尚未单独复验 / 待清理
+
+- 18099 路径仍未单独做「无改动重跑应为 `changed=0` 且无 RUNNING HANDLER」的复验。
+- 新增残留：自检实验重新生成了 `/etc/nginx/conf.d/ops-handler-demo.conf`（当前内容为 8008），nginx 正在监听 8008，需要再次清理。

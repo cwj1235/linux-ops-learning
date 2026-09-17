@@ -843,5 +843,8 @@ GitHub Actions 或同类流水线，实现测试、构建、镜像或发布、�
 - 已讲清的知识点：`pgrep -a` 含义与退出码语义、`semanage <对象> <动作>` 语法与 `-a/-m/-d`、`semanage`（改策略存储，持久）与 `chcon`（改单文件标签，临时）的区别、`curl -sS` 中 `-S` 的必要性、reload 与 restart 的进程级区别。
 - 收尾已完成：`file` 模块删除练习配置（changed=true）→ `systemd` reload（changed=true，MainPID 仍 1314，ExecReload=`/usr/sbin/nginx -s reload`）→ 18099 不再监听、curl 拒绝连接、worker 换为 9563-9566；`handlers-demo/` 已删（changed=true）；`redir-shell.txt` 返回 changed=false（此前已不存在）；`sudo semanage port -d -t http_port_t -p tcp 18099` 已撤销端口标签，环境回到最初状态。
 - 新知：`systemd` 模块输出里的 `ExecReload` 直接印证「reload 就是给 master 发 HUP，MainPID 不变」；`state: reloaded` 的 ad-hoc 任务同样报 `changed=true`，说明模块层 `changed` 也不等于业务生效；`file` 模块删不存在的路径返回 `changed=false` 不报错，这是幂等清理的安全前提。
-- 唯一未单独复验项：18099 路径的「无改动重跑 changed=0」；同一 playbook 在 8008 下已实测 `ok=3 changed=0` 且无 RUNNING HANDLER。
-- 本节不要重做。下一步：多主机部署与 `block/rescue` 错误处理，最后做「一键部署 Nginx」完整 playbook。
+- 自检增强（2026-09-17 补充）：`handlers-nginx.yml` 在 `nginx -t` 之后加 `meta: flush_handlers`，再加 `wait_for`（port=`{{ nginx_demo_port }}`、state=started、timeout=5）。默认 18099 实测 `ok=4 changed=2 failed=1`，`RUNNING HANDLER` 出现在输出中间（flush_handlers 的签名），`wait_for` 报 `Timeout when waiting for 127.0.0.1:18099`，自动复现了 SELinux 拒绑；`-e nginx_demo_port=8008` 实测 `ok=5 changed=2 failed=0`，ss 显示 `LISTEN 127.0.0.1:8008`，curl 返回 `handler demo ok, version=1`，master 仍 1314、worker 换为 12412-12415。
+- 关键结论：两次 `changed` 完全相同（2），只有 `failed` 不同（1 → 0）；`changed` 表示「做了动作」，`failed` 表示「结果对不对」。业务面验证应写进 playbook，不要靠人工翻日志。
+- 待办：自检实验重新生成了 `/etc/nginx/conf.d/ops-handler-demo.conf`（当前为 8008）并让 nginx 监听 8008，需要清理；18099 待决定是 `semanage port -a` 放行还是保持被拦作为故障演练场。
+- 唯一未单独复验项：18099 路径的「无改动重跑 changed=0」。
+- 本节不要重做。下一步：清理残留、学 `block/rescue` 错误处理与多主机部署，最后做「一键部署 Nginx」完整 playbook。

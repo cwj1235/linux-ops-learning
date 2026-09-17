@@ -859,11 +859,105 @@ semanage port -d   ：无输出（撤销成功，18099 恢复为 unreserved_port
 - `state: reloaded` 的 ad-hoc 任务同样报 `changed=true`——模块只知道「我执行了 reload 动作」，不知道「配置是否真的生效」。**模块层的 `changed` 同样不等于业务生效**，这是本节主题的第四次印证。
 - `file` 模块删除一个不存在的路径返回 `changed=false` 而不报错，这正是「幂等清理」写法安全的前提：重复执行不会失败。
 
-最终状态：18099 的端口标签已撤销，练习配置文件和目录已删除，环境回到最初状态。因此 `handlers-nginx.yml` 若按默认变量（18099）重跑，预期会**复现最初的 SELinux 拒绝**（未实测）。
+最终状态：18099 的端口标签已撤销，练习配置文件和目录已删除，环境回到最初状态。**后续实测确认**：按默认变量（18099）重跑会复现最初的 SELinux 拒绝，详见下面的补充小节。
+
+### 补充：给 playbook 加自检（meta: flush_handlers + wait_for）
+
+这一节的 playbook 原本有一个盲区：**没有任何任务在验证「服务真的起来了」**，所以 SELinux 拒绑这件事在代码内部完全不可见。补两处即可让 playbook 自己报错：
+
+```yaml
+  tasks:
+    - name: Render nginx demo config
+      template: ...
+      notify: reload nginx
+
+    - name: Check nginx config
+      command: /usr/sbin/nginx -t
+      register: nginx_test
+      changed_when: false
+
+    - name: Show nginx test result
+      debug:
+        var: nginx_test.stderr_lines
+
+    - name: Flush handlers to reload nginx now
+      meta: flush_handlers          # 新增①：立刻执行排队中的 handler
+
+    - name: Verify demo port is listening
+      wait_for:                     # 新增②：主动探测端口，超时即失败
+        host: 127.0.0.1
+        port: "{{ nginx_demo_port }}"
+        state: started
+        timeout: 5
+
+  handlers:
+    - name: reload nginx
+      systemd:
+        name: nginx
+        state: reloaded
+```
+
+- `meta` 不是普通模块，它是**给 Ansible 引擎的指令**。默认 handler 要等 play 结束才执行，`meta: flush_handlers` 让它在此刻执行。
+- 两处必须配套：**没有 `flush_handlers`，`wait_for` 会排在 handler 之前跑，验的是旧状态，等于白验。**
+- 任务顺序刻意排成「先查语法 → 再 flush 触发 reload → 最后验证端口」。语法有问题时 play 会在 flush 之前停下，根本不去碰 nginx，这正是 handler「失败时不执行」的安全设计。
+
+#### 实测一：默认端口 18099（复现故障）
+
+```bash
+ansible-playbook -i inventory.ini handlers-nginx.yml --syntax-check
+ansible-playbook -i inventory.ini handlers-nginx.yml -K
+```
+
+```text
+syntax-check                        ：playbook: handlers-nginx.yml
+TASK [Render nginx demo config]     ：changed
+TASK [Check nginx config]           ：ok
+TASK [Show nginx test result]       ：ok，stderr_lines 显示 syntax is ok / test is successful
+RUNNING HANDLER [reload nginx]      ：changed（跑在输出中间，不是末尾）
+TASK [Verify demo port is listening]：fatal: FAILED!
+                                      {"changed": false, "elapsed": 5,
+                                       "msg": "Timeout when waiting for 127.0.0.1:18099"}
+PLAY RECAP                          ：ok=4 changed=2 unreachable=0 failed=1
+```
+
+**`RUNNING HANDLER` 出现在输出中间而不是末尾，就是 `meta: flush_handlers` 生效的可视化签名。**
+
+#### 实测二：`-e nginx_demo_port=8008`（对照组）
+
+```bash
+ansible-playbook -i inventory.ini handlers-nginx.yml -e "nginx_demo_port=8008" -K
+ss -lntp | grep 8008 ; curl -sS http://127.0.0.1:8008 ; echo ; pgrep -a nginx
+```
+
+```text
+TASK [Render nginx demo config]     ：changed
+TASK [Check nginx config]           ：ok
+TASK [Show nginx test result]       ：ok
+RUNNING HANDLER [reload nginx]      ：changed
+TASK [Verify demo port is listening]：ok（这次通了）
+PLAY RECAP                          ：ok=5 changed=2 unreachable=0 failed=0
+
+ss     ：LISTEN 127.0.0.1:8008
+curl   ：handler demo ok, version=1
+pgrep  ：1314 master；worker 换为 12412-12415
+```
+
+#### 两次对比的结论
+
+```text
+               changed   failed   业务状态
+18099（被拦）      2        1      端口没监听
+8008 （放行）      2        0      端口正常监听
+```
+
+- 两次的 `changed` **完全一样**（Render + handler 各一个），只有 `failed` 不同。**`changed` 回答的是「我做了动作没有」，`failed` 回答的是「结果对不对」。** 这是「changed 不等于生效」这条铁律在代码层面的最终形态——以前靠人工 `cat`/`ss`/`curl` 判断，现在固化成 `failed`，交给自动化把关。
+- 同一份 playbook、同一个故障、同样的 `changed=2`，只换端口就让 `failed` 从 1 变 0，说明 `wait_for` 的判定真实有效，既不误报也不漏报。
+- 生产写法应把「配置改动 → reload → 业务面验证」当成固定组合，验证手段按服务类型选：端口用 `wait_for`，HTTP 接口用 `uri`，数据库用对应模块的连接检测。
 
 ### 小节结论
 
 - `changed` 不证明副作用真的发生，这是本阶段的第三次验证（前两次：`command` 的 `>>` 失效、模板幂等误读）。要确认真实生效必须查业务面：`ss` 看监听、`curl` 看响应、`pgrep` 看进程。
+- 进一步把业务面验证**写进 playbook**：`meta: flush_handlers` + `wait_for`。两次运行 `changed` 相同（2）而 `failed` 不同（1 → 0），说明「动作」和「结果」必须分开判断。
 - 配置不生效时的排查顺序：先看服务自己的错误日志 → 再看内核层拒绝记录（AVC）→ 最后查策略清单。
 - SELinux 管的是标签，不是权限；给端口打标签远比关掉 SELinux 正确。
 - master PID 不变 + worker 全换 = reload（服务不中断）；master 也换 = restart（有瞬断）。生产配置变更优先 reload。

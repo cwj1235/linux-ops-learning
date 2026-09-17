@@ -78,6 +78,8 @@ new-chat/
 
 ## 当前进度
 
+2026-09-17：给 handler playbook 加上了自检（`meta: flush_handlers` + `wait_for`）。默认端口 18099 重跑时 `ok=4 changed=2 failed=1`，`wait_for` 在 5 秒内自动报出 SELinux 拒绑——同一个故障，旧代码一路绿灯，新代码当场拦下；换成 `-e nginx_demo_port=8008` 后 `ok=5 changed=2 failed=0`。两次 `changed` 完全相同、只有 `failed` 不同，实证「`changed` 表示做了动作，`failed` 表示结果对不对」。下一步：清理自检残留，学习 `block/rescue` 错误处理与多主机部署。
+
 2026-09-17：Ansible handler 对接真实服务已完成。用 `systemd: state=reloaded` 在 nginx 配置变化时热加载，并排查了「reload 报 changed 但服务不生效」的真实故障：`nginx -t` 通过、信号已发出，但 `bind() to 127.0.0.1:18099 failed (13: Permission denied)`；AVC 记录显示 SELinux 拒绝 `name_bind`，18099 的标签是 `unreserved_port_t`。执行 `sudo semanage port -a -t http_port_t -p tcp 18099` 放行后 18099 正常响应，并用白名单内的 8008 做对照实验证明唯一变量是端口。master PID 不变 + worker 全换 = reload 而非 restart。收尾已清理练习配置与目录，并用 `semanage port -d` 撤销 18099 标签，环境回到最初状态。下一步：多主机部署、`when` 条件与 `block/rescue` 错误处理，最后完成一键部署 Nginx 的完整 playbook。
 
 2026-09-17：Ansible handlers 已完成。`handlers-demo.yml` 实测「有变更才触发、无变更不触发、多次触发追加写入」三种情况；排查并定位了 `command` 模块不做重定向导致 handler 报 `changed` 却不生成文件的问题，改用 `shell` 后修复，顺带确认「`changed` 不等于副作用发生」。下一步：用 `systemd` 模块在配置变化时 reload Nginx。

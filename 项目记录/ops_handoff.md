@@ -1779,7 +1779,18 @@ Linux 运维强化基础检查已经完成。下一步可先做一次阶段复�
 - 唯一未单独复验项：18099 路径的「无改动重跑 changed=0」；同一 playbook 在 8008 下已实测 `ok=3 changed=0` 且无 RUNNING HANDLER。
 - 本节不要重做。
 
+## 2026-09-17 补充：handler playbook 加自检（meta: flush_handlers + wait_for）
+
+- `handlers-nginx.yml` 已升级：在 `nginx -t` 之后加 `meta: flush_handlers`，再加 `wait_for`（`host: 127.0.0.1`、`port: {{ nginx_demo_port }}`、`state: started`、`timeout: 5`）验证端口真的在监听。
+- 实测默认 18099：`ok=4 changed=2 failed=1`，`RUNNING HANDLER` 出现在输出中间（`flush_handlers` 生效的可视化签名），`wait_for` 报 `Timeout when waiting for 127.0.0.1:18099` → 自动复现了之前的 SELinux 拒绑故障。
+- 实测 `-e nginx_demo_port=8008`：`ok=5 changed=2 failed=0`，`ss` 显示 `LISTEN 127.0.0.1:8008`，`curl` 返回 `handler demo ok, version=1`，master 仍 1314、worker 换为 12412-12415。
+- 核心结论：两次 `changed` 完全相同（2），只有 `failed` 不同（1 → 0）。`changed` 表示「做了动作」，`failed` 表示「结果对不对」。
+- 待清理：自检实验重新生成了 `/etc/nginx/conf.d/ops-handler-demo.conf`（当前为 8008），nginx 正在监听 8008。
+- 待决定：18099 是正式 `semanage port -a -t http_port_t -p tcp 18099` 放行，还是保持被拦、当作「可复现的故障演练场」。
+
 ## 当前下一步（最新）
 
-1. 学习多主机部署、`when` 条件与 `block/rescue` 错误处理。
-2. 最终完成「一键部署 Nginx 及基础配置」的完整 playbook。
+1. 清理自检实验残留（删除 conf 文件 + reload nginx），并决定 18099 的处理方式。
+2. 学习 `block/rescue` 错误处理，把「验证失败之后怎么恢复」补上。
+3. 学习多主机部署与 `when` 条件。
+4. 最终完成「一键部署 Nginx 及基础配置」的完整 playbook。
