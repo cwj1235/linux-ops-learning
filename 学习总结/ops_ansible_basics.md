@@ -671,10 +671,207 @@ shell  ：redir-shell.txt 生成，12 字节，内容为 shell测试
 - 生产里 handler 应使用模块（例如 `systemd: name=nginx state=reloaded`），不要用 shell 重定向。
 - 本节不要重做。
 
-## 七、后续学习与验收
+## 七、handler 对接真实服务：Nginx reload（已完成）
 
-1. 把 handler 换成真实服务：配置变化时用 `systemd` 模块 reload/restart Nginx，并验证「配置没变就不重启」。
-2. 继续强化幂等性、多主机部署和错误处理。
-3. 最终完成一键部署 Nginx/基础配置的 playbook。
+### 目标
 
-当前 Ansible 安装、本机连通性、Inventory、Ad-hoc 命令、Playbook 基础、变量与模板、handlers 均已完成，后续不要重做。
+把上一节「往日志文件追加一行」换成真实生产动作：模板渲染出的 nginx 配置文件发生变化时，用 `systemd` 模块 reload Nginx，并验证「配置没变就不 reload」。
+
+### 练习文件
+
+`templates/ops-handler-demo.conf.j2`：
+
+```nginx
+# Managed by Ansible: handlers practice
+
+server {
+    listen 127.0.0.1:{{ nginx_demo_port }};
+    server_name _;
+
+    location / {
+        default_type text/plain;
+        return 200 "handler demo ok, version={{ demo_version }}";
+    }
+}
+```
+
+`handlers-nginx.yml` 关键结构：
+
+```yaml
+become: true
+
+vars:
+  nginx_demo_port: 18099
+  demo_version: 1
+  demo_conf: /etc/nginx/conf.d/ops-handler-demo.conf
+
+tasks:
+  - template 模块：渲染到 {{ demo_conf }}，并 notify: reload nginx
+  - command 模块：/usr/sbin/nginx -t，register: nginx_test，changed_when: false
+  - debug 模块：打印 nginx_test.stderr_lines
+
+handlers:
+  - name: reload nginx
+    systemd:
+      name: nginx
+      state: reloaded
+```
+
+要点：
+
+- `become: true` 必须加（写 `/etc/nginx/conf.d/` 需要 root）；本机 `sudo` 需要密码，所以执行时带 `-K`。
+- `command` 模块不经过 shell、不读 `PATH`，要写绝对路径 `/usr/sbin/nginx -t`。
+- `nginx -t` 只做检查、不改系统，所以加 `changed_when: false`，避免每次误报 `changed`。
+- `nginx -t` 的输出走 stderr，所以看 `stderr_lines` 而不是 `stdout`。
+
+### 现象：reload 执行了，但服务不生效
+
+`ok=4 changed=2`，`RUNNING HANDLER [reload nginx]` 正常出现，`nginx -t` 输出 `syntax is ok` / `test is successful`。但是：
+
+```text
+ss -lntp | grep 18099            -> 无输出
+curl -sS http://127.0.0.1:18099  -> curl: (7) Failed connect ... 拒绝连接
+pgrep -a nginx                   -> worker 仍是 1316-1319，一个都没换
+```
+
+### 排查过程（按序排除）
+
+1. `ls -Z /etc/nginx/conf.d/ops-handler-demo.conf` → `root root 0644 system_u:object_r:httpd_config_t:s0`，权限和文件上下文都正常，**排除文件侧**。
+2. `sudo tail -n 30 /var/log/nginx/error.log` → 决定性证据：
+
+```text
+2026/09/17 12:32:02 [notice] 8410#8410: signal process started
+2026/09/17 12:32:02 [emerg] 1314#1314: bind() to 127.0.0.1:18099 failed (13: Permission denied)
+```
+
+3. `sudo semanage port -l | grep http_port_t` → 白名单里没有 18099：
+
+```text
+http_port_t   tcp   80, 81, 443, 488, 8008, 8009, 8443, 9000
+```
+
+4. `sudo grep name_bind /var/log/audit/audit.log | tail -n 3` → SELinux 原始拒绝记录：
+
+```text
+type=AVC msg=audit(1789619522.576:633): avc: denied { name_bind } for pid=1314 comm="nginx" src=18099 scontext=system_u:system_r:httpd_t:s0 tcontext=system_u:object_r:unreserved_port_t:s0 tclass=tcp_socket permissive=0
+```
+
+字段含义：
+
+- `{ name_bind }`：被拒的动作是绑定端口。
+- `pid=1314 comm="nginx"`：与 error.log 里的 `1314#1314` 是同一个 master 进程。
+- `scontext=...:httpd_t:s0`：主体，nginx 进程所在的 SELinux 域。
+- `tcontext=...:unreserved_port_t:s0`：客体，18099 的端口标签是「未预留端口」。
+- `tclass=tcp_socket`：客体类别；`permissive=0`：强制（enforcing）模式，直接拒绝。
+
+### 根因
+
+SELinux 策略里本来就有这条规则：
+
+```text
+allow httpd_t http_port_t:tcp_socket name_bind;
+```
+
+它表示 `httpd_t` 域只能绑定带 `http_port_t` 标签的 TCP 端口。18099 的标签是 `unreserved_port_t`，匹配不上这条 allow，落到默认拒绝，`bind()` 返回 `EACCES`。master 于是放弃新配置、继续用旧配置服务，端口从未被监听。
+
+关键判断：**nginx 以 root 运行，root 绑端口不受「1024 以下需特权」限制；root 还能拿到 EACCES，基本只剩 SELinux。**
+
+还要记住：`nginx -t` 只校验语法，不校验端口能否绑定；`reload` 的退出码只反映信号是否发出，不反映新配置是否生效。
+
+### 对照实验（证明是端口问题）
+
+```bash
+ansible-playbook -i inventory.ini handlers-nginx.yml -e "nginx_demo_port=8008" -K
+ss -lntp | grep 8008 ; curl -sS http://127.0.0.1:8008 ; echo ; pgrep -a nginx
+```
+
+```text
+LISTEN     0      511    127.0.0.1:8008
+handler demo ok, version=1
+1314 nginx: master process /usr/sbin/nginx
+8809 / 8810 / 8812 / 8813 nginx: worker process
+```
+
+模板和 playbook 一个字没改，8008 通、18099 不通 → **SELinux 端口白名单实锤**。另外 master 仍是 1314、worker 全部换新 PID，证明走的是 **reload（热加载）而不是 restart**。
+
+### 修复（生产标准做法）
+
+```bash
+sudo semanage port -a -t http_port_t -p tcp 18099
+sudo semanage port -l | grep http_port_t
+ansible-playbook -i inventory.ini handlers-nginx.yml -K
+ss -lntp | grep 18099 ; curl -sS http://127.0.0.1:18099 ; echo ; pgrep -a nginx
+```
+
+```text
+http_port_t  tcp  18099, 80, 81, 443, 488, 8008, 8009, 8443, 9000
+LISTEN     0      511    127.0.0.1:18099
+handler demo ok, version=1
+1314 nginx: master process /usr/sbin/nginx
+9088 / 9089 / 9090 / 9091 nginx: worker process
+```
+
+同一个配置文件，从「拒绝连接」变成「正常响应」，唯一变化是端口标签，因果链闭合。
+
+### 三种处理方式
+
+- 换白名单内端口（8008、81、9000……）：零副作用，但等于让业务迁就 SELinux；生产上端口常由上游、防火墙或监控约定，不能随便改。
+- `sudo semanage port -a -t http_port_t -p tcp <端口>`：**生产标准做法**，让策略认可业务端口。`-a` 加、`-m` 改、`-d` 删。
+- `sudo setenforce 0`：临时切到 permissive，**只能用来一次性确认「是不是 SELinux 的锅」**，确认后必须切回 `Enforcing`，不能留在环境里。
+
+### 命令语法小结
+
+```bash
+pgrep -a nginx          # -a 打印完整命令行；不加只输出 PID 数字
+                        # 退出码：找到返回 0，没找到返回 1，可直接用于 shell 判断
+semanage <对象> <动作>   # 对象如 port / fcontext / boolean；动作 -l 列、-a 加、-m 改、-d 删
+                        # -t 指定 SELinux 类型标签，-p 指定协议
+curl -sS                # -s 静默；-S 在静默下依然打印错误，排查时必须写 -sS
+```
+
+`semanage` 改的是**策略存储**（持久生效），`chcon` 只改单个文件标签（临时，会被 `restorecon` 覆盖）。正经修复用 `semanage`。
+
+### 收尾清理与最终状态
+
+```bash
+ansible local -i inventory.ini -b -K -m file -a 'path=/etc/nginx/conf.d/ops-handler-demo.conf state=absent'
+ansible local -i inventory.ini -b -K -m systemd -a 'name=nginx state=reloaded'
+ss -lntp | grep 18099 ; curl -sS http://127.0.0.1:18099 ; echo ; pgrep -a nginx
+ansible local -i inventory.ini -m file -a 'path=/home/atguigu/ansible-practice/redir-shell.txt state=absent'
+ansible local -i inventory.ini -m file -a 'path=/home/atguigu/ansible-practice/handlers-demo state=absent'
+sudo semanage port -d -t http_port_t -p tcp 18099
+```
+
+```text
+file 删练习配置    ：changed=true
+systemd reload    ：changed=true，MainPID 仍 1314
+                     ExecReload = /usr/sbin/nginx -s reload（pid=9087，code=exited，status=0）
+删除后验证         ：ss 无输出；curl 拒绝连接（预期，服务已被主动撤掉）
+                     master 仍 1314；worker 换为 9563-9566
+删 redir-shell.txt ：changed=false（此前就已经不存在，幂等的 no-op）
+删 handlers-demo/  ：changed=true
+semanage port -d   ：无输出（撤销成功，18099 恢复为 unreserved_port_t）
+```
+
+三个额外收获：
+
+- `systemd` 模块的输出里有 `ExecReload = { path=/usr/sbin/nginx ; argv[]=/usr/sbin/nginx -s reload ... }`，**直接印证了之前对 error.log 里 `signal process started` 的解释**：reload 就是用 `nginx -s reload` 给 master 发 HUP 信号，所以 `MainPID` 1314 全程不变。
+- `state: reloaded` 的 ad-hoc 任务同样报 `changed=true`——模块只知道「我执行了 reload 动作」，不知道「配置是否真的生效」。**模块层的 `changed` 同样不等于业务生效**，这是本节主题的第四次印证。
+- `file` 模块删除一个不存在的路径返回 `changed=false` 而不报错，这正是「幂等清理」写法安全的前提：重复执行不会失败。
+
+最终状态：18099 的端口标签已撤销，练习配置文件和目录已删除，环境回到最初状态。因此 `handlers-nginx.yml` 若按默认变量（18099）重跑，预期会**复现最初的 SELinux 拒绝**（未实测）。
+
+### 小节结论
+
+- `changed` 不证明副作用真的发生，这是本阶段的第三次验证（前两次：`command` 的 `>>` 失效、模板幂等误读）。要确认真实生效必须查业务面：`ss` 看监听、`curl` 看响应、`pgrep` 看进程。
+- 配置不生效时的排查顺序：先看服务自己的错误日志 → 再看内核层拒绝记录（AVC）→ 最后查策略清单。
+- SELinux 管的是标签，不是权限；给端口打标签远比关掉 SELinux 正确。
+- master PID 不变 + worker 全换 = reload（服务不中断）；master 也换 = restart（有瞬断）。生产配置变更优先 reload。
+- 本节不要重做。
+
+## 八、后续学习与验收
+
+1. 继续强化幂等性、多主机部署和错误处理（多台主机、`when` 条件与 `block/rescue`）。
+2. 最终完成一键部署 Nginx 及基础配置的 playbook。
+
+当前 Ansible 安装、本机连通性、Inventory、Ad-hoc 命令、Playbook 基础、变量与模板、handlers、handler 对接 Nginx reload（含 SELinux 端口放行）均已完成，后续不要重做。

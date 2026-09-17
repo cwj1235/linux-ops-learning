@@ -1763,3 +1763,23 @@ Linux 运维强化基础检查已经完成。下一步可先做一次阶段复�
 - 生产写法应使用模块而非 shell 重定向，例如 `systemd: name=nginx state=reloaded`；这是下一节要做的。
 - 保留下一步要复用的文件：`handlers-demo.yml`、`templates/app.conf.j2`、`handlers-demo/`；练习残留 `redir-shell.txt` 可清理。
 - 本节不要重做。下一步：真实服务重启（Nginx reload）。
+
+## 2026-09-17 handler 对接真实服务（Nginx reload）完成
+
+- 已创建 `templates/ops-handler-demo.conf.j2`（渲染 `listen 127.0.0.1:{{ nginx_demo_port }}` 与 `return 200 "handler demo ok, version={{ demo_version }}"`）和 `handlers-nginx.yml`（`become: true`；template + `notify: reload nginx`、`command: /usr/sbin/nginx -t` 配 `register` 和 `changed_when: false`、debug；handler 用 `systemd: name=nginx state=reloaded`）。
+- 执行必须带 `-K`（`--ask-become-pass`），本机 `sudo` 对 `atguigu` 需要密码，提示 `BECOME password:` 且输入不回显。不要把密码写进任何记录。
+- 首次执行 `ok=4 changed=2`，`RUNNING HANDLER` 出现、`nginx -t` 通过，但服务不生效：18099 无监听、`curl` 拒绝连接、worker PID 未变。
+- 根因是 SELinux 未放行 18099：`/var/log/nginx/error.log` 有 `bind() to 127.0.0.1:18099 failed (13: Permission denied)`；`sudo semanage port -l | grep http_port_t` 显示白名单为 `80, 81, 443, 488, 8008, 8009, 8443, 9000`；audit 日志有 `avc: denied { name_bind } ... tcontext=system_u:object_r:unreserved_port_t:s0 tclass=tcp_socket permissive=0`。
+- 对照实验：`-e "nginx_demo_port=8008"`（白名单内端口）立即可用，master 仍 1314、worker 换为 8809/8810/8812/8813 → 唯一变量是端口，同时证明走的是 reload 而非 restart。
+- 修复：`sudo semanage port -a -t http_port_t -p tcp 18099`，白名单变为 `18099, 80, 81, 443, 488, 8008, 8009, 8443, 9000`；不带 `-e` 重跑后 18099 正常监听、`curl` 返回 `handler demo ok, version=1`，master 仍 1314、worker 换为 9088/9089/9090/9091。
+- 关键结论：`changed` 不证明副作用发生（本阶段第三次验证）；配置不生效的排查顺序是「服务错误日志 → 内核 AVC 记录 → 策略清单」；SELinux 管的是标签不是权限；master PID 不变 + worker 全换 = reload。
+- 收尾已完成（2026-09-17）：`file` 模块删除 `/etc/nginx/conf.d/ops-handler-demo.conf`（changed=true）→ `systemd` 模块 reload（changed=true，MainPID 仍 1314，ExecReload 显示 `/usr/sbin/nginx -s reload`）→ 验证 18099 不再监听、curl 拒绝连接、worker 换为 9563-9566。`handlers-demo/` 已删除（changed=true）；`redir-shell.txt` 返回 changed=false（此前已不存在）。
+- `sudo semanage port -d -t http_port_t -p tcp 18099` 已执行（无输出），18099 恢复为 `unreserved_port_t`，环境回到最初状态；按默认变量重跑 `handlers-nginx.yml` 会再次被 SELinux 拒绝（未实测）。
+- 保留资产：`inventory.ini`、`site.yml`、`vars-template.yml`、`handlers-nginx.yml`、`templates/app.conf.j2`、`templates/ops-handler-demo.conf.j2`。
+- 唯一未单独复验项：18099 路径的「无改动重跑 changed=0」；同一 playbook 在 8008 下已实测 `ok=3 changed=0` 且无 RUNNING HANDLER。
+- 本节不要重做。
+
+## 当前下一步（最新）
+
+1. 学习多主机部署、`when` 条件与 `block/rescue` 错误处理。
+2. 最终完成「一键部署 Nginx 及基础配置」的完整 playbook。

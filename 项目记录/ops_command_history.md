@@ -4365,3 +4365,155 @@ cat /home/atguigu/ansible-practice/handlers-demo/handler.log
 ```
 
 结论：handler 只在任务真正产生变更时执行；判断依据是输出里有没有 `RUNNING HANDLER`；`changed` 不证明副作用发生。
+
+## 2026-09-17 handler 对接真实服务：Nginx reload
+
+### 创建练习文件
+
+```bash
+cd /home/atguigu/ansible-practice
+cat > templates/ops-handler-demo.conf.j2 <<'EOF'
+# Managed by Ansible: handlers practice
+
+server {
+    listen 127.0.0.1:{{ nginx_demo_port }};
+    server_name _;
+
+    location / {
+        default_type text/plain;
+        return 200 "handler demo ok, version={{ demo_version }}";
+    }
+}
+EOF
+
+cat > handlers-nginx.yml <<'EOF'
+---
+- name: Practice handlers with real service
+  hosts: local
+  connection: local
+  gather_facts: false
+  become: true
+
+  vars:
+    nginx_demo_port: 18099
+    demo_version: 1
+    demo_conf: /etc/nginx/conf.d/ops-handler-demo.conf
+
+  tasks:
+    - name: Render nginx demo config
+      template:
+        src: templates/ops-handler-demo.conf.j2
+        dest: "{{ demo_conf }}"
+        mode: '0644'
+      notify: reload nginx
+
+    - name: Check nginx config
+      command: /usr/sbin/nginx -t
+      register: nginx_test
+      changed_when: false
+
+    - name: Show nginx test result
+      debug:
+        var: nginx_test.stderr_lines
+
+  handlers:
+    - name: reload nginx
+      systemd:
+        name: nginx
+        state: reloaded
+EOF
+```
+
+### 第一次执行与服务不生效
+
+```bash
+ansible-playbook -i inventory.ini handlers-nginx.yml -K
+ss -lntp | grep 18099
+curl -sS http://127.0.0.1:18099 ; echo
+pgrep -a nginx
+```
+
+```text
+playbook：ok=4 changed=2，出现 RUNNING HANDLER [reload nginx]
+nginx -t：syntax is ok / test is successful（在 stderr_lines 里）
+ss      ：无输出
+curl    ：curl: (7) Failed connect to 127.0.0.1:18099; 拒绝连接
+pgrep   ：1314 master + worker 1316/1317/1318/1319，worker 一个都没换
+```
+
+### 定位根因
+
+```bash
+ls -Z /etc/nginx/conf.d/ops-handler-demo.conf
+sudo tail -n 30 /var/log/nginx/error.log
+sudo semanage port -l | grep http_port_t
+sudo grep name_bind /var/log/audit/audit.log | tail -n 3
+```
+
+```text
+ls -Z       ：root root 0644 system_u:object_r:httpd_config_t:s0，文件侧正常
+error.log   ：[notice] signal process started
+              [emerg] 1314#1314: bind() to 127.0.0.1:18099 failed (13: Permission denied)
+http_port_t ：tcp 80, 81, 443, 488, 8008, 8009, 8443, 9000（不含 18099）
+audit.log   ：avc: denied { name_bind } for pid=1314 comm="nginx" src=18099
+              scontext=system_u:system_r:httpd_t:s0 tcontext=system_u:object_r:unreserved_port_t:s0
+              tclass=tcp_socket permissive=0
+```
+
+结论：SELinux 端口白名单不含 18099，`httpd_t` 域绑定被拒，master 放弃新配置继续用旧配置服务。注意 `sudo semanage` 不加 `sudo` 会报 `ValueError: 没有管理 SELinux 策略或者无法访问存储`。
+
+### 对照实验与修复
+
+```bash
+ansible-playbook -i inventory.ini handlers-nginx.yml -e "nginx_demo_port=8008" -K
+ss -lntp | grep 8008 ; curl -sS http://127.0.0.1:8008 ; echo ; pgrep -a nginx
+
+sudo semanage port -a -t http_port_t -p tcp 18099
+sudo semanage port -l | grep http_port_t
+ansible-playbook -i inventory.ini handlers-nginx.yml -K
+ss -lntp | grep 18099 ; curl -sS http://127.0.0.1:18099 ; echo ; pgrep -a nginx
+```
+
+```text
+-e nginx_demo_port=8008   ：ok=4 changed=2，LISTEN 127.0.0.1:8008
+                            curl 返回 handler demo ok, version=1
+                            master 仍 1314，worker 换为 8809/8810/8812/8813
+同参数再跑一次             ：ok=3 changed=0，无 RUNNING HANDLER
+sudo semanage port -a      ：无输出（成功）
+sudo semanage port -l      ：http_port_t tcp 18099, 80, 81, 443, 488, 8008, 8009, 8443, 9000
+不带 -e 重跑（回 18099）   ：ok=4 changed=2，出现 RUNNING HANDLER
+最终验证                   ：LISTEN 127.0.0.1:18099
+                            curl 返回 handler demo ok, version=1
+                            master 仍 1314，worker 换为 9088/9089/9090/9091
+```
+
+结论：同一份配置在 18099 上从「拒绝连接」变为「正常响应」，唯一变化是 SELinux 端口标签。master PID 不变 + worker 全换 = reload 热加载，不是 restart。
+
+### 收尾清理与最终状态
+
+```bash
+ansible local -i inventory.ini -b -K -m file -a 'path=/etc/nginx/conf.d/ops-handler-demo.conf state=absent'
+ansible local -i inventory.ini -b -K -m systemd -a 'name=nginx state=reloaded'
+ss -lntp | grep 18099 ; curl -sS http://127.0.0.1:18099 ; echo ; pgrep -a nginx
+ansible local -i inventory.ini -m file -a 'path=/home/atguigu/ansible-practice/redir-shell.txt state=absent'
+ansible local -i inventory.ini -m file -a 'path=/home/atguigu/ansible-practice/handlers-demo state=absent'
+sudo semanage port -d -t http_port_t -p tcp 18099
+```
+
+```text
+file 删练习配置    ：changed=true
+systemd reload    ：changed=true，MainPID 仍 1314
+                     ExecReload = /usr/sbin/nginx -s reload（pid=9087，code=exited，status=0）
+删除后验证         ：ss 无输出；curl 拒绝连接（预期，服务已被主动撤掉）
+                     master 仍 1314；worker 换为 9563-9566
+删 redir-shell.txt ：changed=false（此前就已经不存在）
+删 handlers-demo/  ：changed=true
+semanage port -d   ：无输出（撤销成功）
+```
+
+（撤销后未再运行 `sudo semanage port -l | grep http_port_t` 确认；本次以 `semanage port -d` 无报错视为成功。）
+
+### 本节尚未单独复验
+
+- 18099 路径在清理前未单独做「无改动重跑」复验；但同一 playbook 在 `-e nginx_demo_port=8008` 的第二次执行已实测 `ok=3 changed=0` 且无 RUNNING HANDLER，模板与 handler 完全一致。
+- 撤销 18099 端口标签后，按默认变量重跑预期会再次被 SELinux 拒绝，未实测。

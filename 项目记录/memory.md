@@ -832,3 +832,16 @@ GitHub Actions 或同类流水线，实现测试、构建、镜像或发布、�
 - 关键结论：`changed` 不证明副作用发生；判断 handler 是否执行看有没有 `RUNNING HANDLER` 段落；生产 handler 应使用 `systemd` 等模块而非 shell 重定向。
 - 保留复用文件 `handlers-demo.yml`、`templates/app.conf.j2`、`handlers-demo/`；练习残留 `redir-shell.txt` 待清理。
 - 本节不要重做。下一步：真实服务重启（Nginx reload）。
+
+## 2026-09-17 Ansible handler 对接真实服务（Nginx reload）完成
+
+- 已创建 `templates/ops-handler-demo.conf.j2` 和 `handlers-nginx.yml`：`become: true`，template 渲染到 `/etc/nginx/conf.d/ops-handler-demo.conf` 并 `notify: reload nginx`，handler 为 `systemd: name=nginx state=reloaded`；另有 `command: /usr/sbin/nginx -t` 配 `changed_when: false` 用于校验。执行需带 `-K`。
+- 首次执行 `ok=4 changed=2`、`RUNNING HANDLER` 正常出现、`nginx -t` 通过，但服务不生效（18099 无监听、curl 拒绝连接、worker PID 未变）。这是本阶段第三次证明「`changed` 不等于副作用发生」。
+- 根因：SELinux 未放行 18099。error.log 有 `bind() to 127.0.0.1:18099 failed (13: Permission denied)`；`http_port_t` 白名单为 `80, 81, 443, 488, 8008, 8009, 8443, 9000`；audit.log 有 `avc: denied { name_bind } ... tcontext=unreserved_port_t ... tclass=tcp_socket permissive=0`。排查顺序：服务错误日志 → 内核 AVC 记录 → 策略清单。
+- 对照实验 `-e "nginx_demo_port=8008"` 立即可用，master 仍 1314、worker 换为 8809/8810/8812/8813，证明唯一变量是端口，且走的是 reload 热加载。
+- 修复：`sudo semanage port -a -t http_port_t -p tcp 18099` 后重跑，18099 正常监听、curl 返回 `handler demo ok, version=1`，master 仍 1314、worker 换为 9088/9089/9090/9091。
+- 已讲清的知识点：`pgrep -a` 含义与退出码语义、`semanage <对象> <动作>` 语法与 `-a/-m/-d`、`semanage`（改策略存储，持久）与 `chcon`（改单文件标签，临时）的区别、`curl -sS` 中 `-S` 的必要性、reload 与 restart 的进程级区别。
+- 收尾已完成：`file` 模块删除练习配置（changed=true）→ `systemd` reload（changed=true，MainPID 仍 1314，ExecReload=`/usr/sbin/nginx -s reload`）→ 18099 不再监听、curl 拒绝连接、worker 换为 9563-9566；`handlers-demo/` 已删（changed=true）；`redir-shell.txt` 返回 changed=false（此前已不存在）；`sudo semanage port -d -t http_port_t -p tcp 18099` 已撤销端口标签，环境回到最初状态。
+- 新知：`systemd` 模块输出里的 `ExecReload` 直接印证「reload 就是给 master 发 HUP，MainPID 不变」；`state: reloaded` 的 ad-hoc 任务同样报 `changed=true`，说明模块层 `changed` 也不等于业务生效；`file` 模块删不存在的路径返回 `changed=false` 不报错，这是幂等清理的安全前提。
+- 唯一未单独复验项：18099 路径的「无改动重跑 changed=0」；同一 playbook 在 8008 下已实测 `ok=3 changed=0` 且无 RUNNING HANDLER。
+- 本节不要重做。下一步：多主机部署与 `block/rescue` 错误处理，最后做「一键部署 Nginx」完整 playbook。

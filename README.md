@@ -78,6 +78,8 @@ new-chat/
 
 ## 当前进度
 
+2026-09-17：Ansible handler 对接真实服务已完成。用 `systemd: state=reloaded` 在 nginx 配置变化时热加载，并排查了「reload 报 changed 但服务不生效」的真实故障：`nginx -t` 通过、信号已发出，但 `bind() to 127.0.0.1:18099 failed (13: Permission denied)`；AVC 记录显示 SELinux 拒绝 `name_bind`，18099 的标签是 `unreserved_port_t`。执行 `sudo semanage port -a -t http_port_t -p tcp 18099` 放行后 18099 正常响应，并用白名单内的 8008 做对照实验证明唯一变量是端口。master PID 不变 + worker 全换 = reload 而非 restart。收尾已清理练习配置与目录，并用 `semanage port -d` 撤销 18099 标签，环境回到最初状态。下一步：多主机部署、`when` 条件与 `block/rescue` 错误处理，最后完成一键部署 Nginx 的完整 playbook。
+
 2026-09-17：Ansible handlers 已完成。`handlers-demo.yml` 实测「有变更才触发、无变更不触发、多次触发追加写入」三种情况；排查并定位了 `command` 模块不做重定向导致 handler 报 `changed` 却不生成文件的问题，改用 `shell` 后修复，顺带确认「`changed` 不等于副作用发生」。下一步：用 `systemd` 模块在配置变化时 reload Nginx。
 
 2026-09-16：Ansible 阶段已完成五节——安装与本机连通性、Inventory、Ad-hoc 命令、Playbook 基础、变量与模板。变量来源与优先级（inventory/facts -> playbook `vars` -> 命令行 `-e`）已实测，未定义变量会直接 `FAILED!`；`templates/app.conf.j2` 与 `vars-template.yml` 已完成渲染、幂等（`changed=2` -> `changed=0`）和 `-e` 覆盖（`changed=1` -> `changed=0`）验证。下一步：Ansible handlers。下方 2026-09-14 段落里的“下一步”是 Redis 阶段的历史停点。
@@ -115,7 +117,7 @@ Redis 内存上限：128 MiB 已写入配置文件，2026-09-14 17:10 服务重�
 当前练习键：practice:rdb-check 在正常重启后仍读到 rdb-ok，与备份一并保留，尚未清理
 Redis AOF：`appendonly yes` 已写入 `/etc/redis.conf`；`/var/lib/redis/appendonly.aof` 已生成，重启日志确认从 AOF 加载，`practice:aof-check` 读回 `aof-ok`
 Docker 安装、镜像加速、容器生命周期、数据卷、端口映射、Dockerfile 与 Compose 编排：已完成
-Ansible 安装与 Inventory、Ad-hoc 命令、Playbook 基础、变量与模板、handlers：已完成
+Ansible 安装与 Inventory、Ad-hoc 命令、Playbook 基础、变量与模板、handlers、handler 对接 Nginx reload（含 SELinux 端口放行）：已完成
 ```
 
 下一步：只读检查 `/var/lib/redis-noeviction-20260914` 的目录内容，并再次确认 6381 无残留监听；用户确认目录只包含本次实验文件后，再指导安全清理该临时目录。正式 6379 的 128 MiB 上限、练习键和 noeviction 策略均已验收，不再重复设置或重启；配置备份 `/etc/redis.conf.before-maxmemory-20260914-165752` 保留。性能调优、断电恢复和高可用尚未验证，原始数据备份与 AOF 保留。
