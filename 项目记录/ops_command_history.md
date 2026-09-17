@@ -4545,4 +4545,111 @@ pgrep                   ：1314 nginx: master process；worker 12412/12413/12414
 ### 本节尚未单独复验 / 待清理
 
 - 18099 路径仍未单独做「无改动重跑应为 `changed=0` 且无 RUNNING HANDLER」的复验。
-- 新增残留：自检实验重新生成了 `/etc/nginx/conf.d/ops-handler-demo.conf`（当前内容为 8008），nginx 正在监听 8008，需要再次清理。
+- 自检实验残留已清理（2026-09-17）：
+
+```bash
+ansible local -i inventory.ini -b -K -m file -a 'path=/etc/nginx/conf.d/ops-handler-demo.conf state=absent'
+ansible local -i inventory.ini -b -K -m systemd -a 'name=nginx state=reloaded'
+ss -lntp | grep -E ':8008|:18099' ; curl -sS http://127.0.0.1:8008 ; echo ; pgrep -a nginx
+```
+
+```text
+file           ：changed=true
+systemd reload ：changed=true，MainPID 仍 1314；ExecReload pid=12411 status=0
+ss             ：无输出（8008 与 18099 都不再监听）
+curl           ：拒绝连接（预期）
+pgrep          ：1314 nginx: master process；worker 换为 12616-12619
+```
+
+- 端口约定：练习统一使用白名单内的 8008；18099 保持被 SELinux 拦截，作为下一节 `block/rescue` 的故障教材。
+
+## 2026-09-17 block 与 rescue 错误处理
+
+### 先确认「没有 rescue」的后果
+
+```bash
+ansible-playbook -i inventory.ini handlers-nginx.yml -K
+ls -l /etc/nginx/conf.d/ops-handler-demo.conf
+ss -lntp | grep 18099 ; pgrep -a nginx
+```
+
+```text
+playbook ：ok=4 changed=2 failed=1 rescued=0
+ls -l    ：-rw-r--r--. 1 root root 204 9月 17 19:57 /etc/nginx/conf.d/ops-handler-demo.conf
+           → 任务失败但半成品文件仍留在磁盘上
+ss       ：无输出
+pgrep    ：1314 master + worker 12616-12619（一个都没换）
+```
+
+结论：nginx 绑定失败时会放弃新配置、连 worker 都不切换，继续用旧配置跑。
+
+### 改写为 block + rescue 版本
+
+```bash
+cd /home/atguigu/ansible-practice
+cat > handlers-nginx.yml <<'EOF'
+（完整内容见学习总结「八、block 与 rescue 错误处理」小节）
+EOF
+ansible-playbook -i inventory.ini handlers-nginx.yml --syntax-check
+ansible-playbook -i inventory.ini handlers-nginx.yml -K
+ls -l /etc/nginx/conf.d/ops-handler-demo.conf ; systemctl is-active nginx ; ss -lntp | grep 18099 ; pgrep -a nginx
+```
+
+```text
+syntax-check                                 ：playbook: handlers-nginx.yml
+TASK [Render nginx demo config]              ：ok（不是 changed！）
+TASK [Check nginx config]                    ：ok
+TASK [Show nginx test result]                ：ok
+（完全没有 RUNNING HANDLER）
+TASK [Verify demo port is listening]         ：fatal，Timeout when waiting for 127.0.0.1:18099
+TASK [Remove the broken config file]         ：changed
+TASK [Reload nginx to drop the broken config]：changed
+TASK [Report the rollback and fail]          ：fatal，"18099 未能生效，已回滚 /etc/nginx/conf.d/ops-handler-demo.conf"
+PLAY RECAP                                   ：ok=5 changed=2 failed=1 rescued=1
+
+ls        ：没有那个文件或目录（半成品已删除）
+systemctl ：active
+ss        ：18099 无监听
+pgrep     ：1314 master；worker 换为 13290-13293
+```
+
+关键发现：本轮 `Render` 为 `ok` 而非 `changed`，因为上一轮失败残留的文件内容与本次渲染结果完全相同，checksum 命中 → 不 notify → handler 不触发。但 `wait_for` 仍然失败并触发 rescue，因为它检查的是「端口在不在监听」这个持续状态，与「本轮有没有改动」无关。**handler 对本轮变更负责，`wait_for` 对最终状态负责。**
+
+预估纠正：先前按「文件会被重写」预计 `ok=6 changed=4`，实际 `ok=5 changed=2`。
+
+### 对照组：成功路径
+
+```bash
+ansible-playbook -i inventory.ini handlers-nginx.yml -e "nginx_demo_port=8008" -K
+ss -lntp | grep 8008 ; curl -sS http://127.0.0.1:8008 ; echo ; pgrep -a nginx
+```
+
+```text
+TASK [Render nginx demo config]                ：changed（上一轮 rescue 已删掉文件，要重新创建）
+TASK [Check nginx config]                      ：ok
+TASK [Show nginx test result]                  ：ok
+RUNNING HANDLER [reload nginx]                 ：changed
+TASK [Verify demo port is listening]           ：ok
+PLAY RECAP                                     ：ok=5 changed=2 failed=0 rescued=0
+ss    ：LISTEN 127.0.0.1:8008
+curl  ：handler demo ok, version=1
+pgrep ：1314 master；worker 13472-13475
+```
+
+结论：失败路径 `rescued=1`、成功路径 `rescued=0`，rescue 只在需要时介入；`Render` 报 `changed` 还是 `ok` 取决于当前状态与目标状态的差异。
+
+### 本节收尾清理（已完成）
+
+```bash
+ansible local -i inventory.ini -b -K -m file -a 'path=/etc/nginx/conf.d/ops-handler-demo.conf state=absent'
+ansible local -i inventory.ini -b -K -m systemd -a 'name=nginx state=reloaded'
+ss -lntp | grep -E ':8008|:18099' ; systemctl is-active nginx ; pgrep -a nginx
+```
+
+```text
+file           ：changed=true
+systemd reload ：changed=true，MainPID 仍 1314；ExecReload pid=13471 status=0
+ss             ：无输出（8008 与 18099 都不再监听）
+systemctl      ：active
+pgrep          ：1314 master；worker 换为 13631-13634
+```

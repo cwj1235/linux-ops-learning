@@ -78,7 +78,9 @@ new-chat/
 
 ## 当前进度
 
-2026-09-17：给 handler playbook 加上了自检（`meta: flush_handlers` + `wait_for`）。默认端口 18099 重跑时 `ok=4 changed=2 failed=1`，`wait_for` 在 5 秒内自动报出 SELinux 拒绑——同一个故障，旧代码一路绿灯，新代码当场拦下；换成 `-e nginx_demo_port=8008` 后 `ok=5 changed=2 failed=0`。两次 `changed` 完全相同、只有 `failed` 不同，实证「`changed` 表示做了动作，`failed` 表示结果对不对」。下一步：清理自检残留，学习 `block/rescue` 错误处理与多主机部署。
+2026-09-17：Ansible `block`/`rescue` 错误处理已完成。先用 18099 确认「没有 rescue」的后果——任务报红，但 204 字节的半成品配置留在 `/etc/nginx/conf.d/` 里，worker 一个没换（nginx 绑定失败会放弃新配置、继续用旧配置跑）。改写为 `block` + `rescue`（删文件 → reload 回退 → `fail:` 明确报红）后实测 `ok=5 changed=2 failed=1 rescued=1`，回滚后文件已删、nginx 仍 active。意外收获：本轮 `Render` 是 `ok` 而非 `changed`（上一轮残留文件与本次渲染内容一致，checksum 命中），因此没有触发 handler，但 `wait_for` 仍抓到了坏状态——**handler 对本轮变更负责，`wait_for` 对最终状态负责**。成功路径对照 `-e nginx_demo_port=8008` 实测 `rescued=0 failed=0`，证明 rescue 只在需要时介入；残留已清理，nginx 只保留原有 80 端口服务。下一步：多主机部署与 `when` 条件。
+
+2026-09-17：给 handler playbook 加上了自检（`meta: flush_handlers` + `wait_for`）。默认端口 18099 重跑时 `ok=4 changed=2 failed=1`，`wait_for` 在 5 秒内自动报出 SELinux 拒绑——同一个故障，旧代码一路绿灯，新代码当场拦下；换成 `-e nginx_demo_port=8008` 后 `ok=5 changed=2 failed=0`。两次 `changed` 完全相同、只有 `failed` 不同，实证「`changed` 表示做了动作，`failed` 表示结果对不对」。自检实验残留已清理，nginx 上 8008 与 18099 均不再监听。端口约定：练习用白名单内 8008，18099 保持被 SELinux 拦截作为故障演练场。下一步：学习 `block/rescue` 错误处理与多主机部署。
 
 2026-09-17：Ansible handler 对接真实服务已完成。用 `systemd: state=reloaded` 在 nginx 配置变化时热加载，并排查了「reload 报 changed 但服务不生效」的真实故障：`nginx -t` 通过、信号已发出，但 `bind() to 127.0.0.1:18099 failed (13: Permission denied)`；AVC 记录显示 SELinux 拒绝 `name_bind`，18099 的标签是 `unreserved_port_t`。执行 `sudo semanage port -a -t http_port_t -p tcp 18099` 放行后 18099 正常响应，并用白名单内的 8008 做对照实验证明唯一变量是端口。master PID 不变 + worker 全换 = reload 而非 restart。收尾已清理练习配置与目录，并用 `semanage port -d` 撤销 18099 标签，环境回到最初状态。下一步：多主机部署、`when` 条件与 `block/rescue` 错误处理，最后完成一键部署 Nginx 的完整 playbook。
 

@@ -954,6 +954,25 @@ pgrep  ：1314 master；worker 换为 12412-12415
 - 同一份 playbook、同一个故障、同样的 `changed=2`，只换端口就让 `failed` 从 1 变 0，说明 `wait_for` 的判定真实有效，既不误报也不漏报。
 - 生产写法应把「配置改动 → reload → 业务面验证」当成固定组合，验证手段按服务类型选：端口用 `wait_for`，HTTP 接口用 `uri`，数据库用对应模块的连接检测。
 
+#### 自检实验后的清理（已完成）
+
+```bash
+ansible local -i inventory.ini -b -K -m file -a 'path=/etc/nginx/conf.d/ops-handler-demo.conf state=absent'
+ansible local -i inventory.ini -b -K -m systemd -a 'name=nginx state=reloaded'
+ss -lntp | grep -E ':8008|:18099' ; curl -sS http://127.0.0.1:8008 ; echo ; pgrep -a nginx
+```
+
+```text
+file           ：changed=true
+systemd reload ：changed=true，MainPID 仍 1314
+                 ExecReload = /usr/sbin/nginx -s reload（pid=12411，status=0）
+ss             ：无输出（8008 与 18099 都不再监听）
+curl           ：拒绝连接（预期，服务已被主动撤掉）
+pgrep          ：1314 master；worker 换为 12616-12619
+```
+
+**端口约定（本项目后续遵守）**：练习统一使用白名单内的 8008；**18099 保持被 SELinux 拦截**，作为「可复现的故障演练场」，留给下一节的 `block/rescue` 错误处理当教材。
+
 ### 小节结论
 
 - `changed` 不证明副作用真的发生，这是本阶段的第三次验证（前两次：`command` 的 `>>` 失效、模板幂等误读）。要确认真实生效必须查业务面：`ss` 看监听、`curl` 看响应、`pgrep` 看进程。
@@ -963,9 +982,176 @@ pgrep  ：1314 master；worker 换为 12412-12415
 - master PID 不变 + worker 全换 = reload（服务不中断）；master 也换 = restart（有瞬断）。生产配置变更优先 reload。
 - 本节不要重做。
 
-## 八、后续学习与验收
+## 八、block 与 rescue 错误处理（已完成）
 
-1. 继续强化幂等性、多主机部署和错误处理（多台主机、`when` 条件与 `block/rescue`）。
-2. 最终完成一键部署 Nginx 及基础配置的 playbook。
+### 目标
 
-当前 Ansible 安装、本机连通性、Inventory、Ad-hoc 命令、Playbook 基础、变量与模板、handlers、handler 对接 Nginx reload（含 SELinux 端口放行）均已完成，后续不要重做。
+让 playbook 在业务面验证失败后**自动回滚**，不在磁盘上留下半成品配置。
+
+### 先确认「没有 rescue」的后果
+
+```bash
+ansible-playbook -i inventory.ini handlers-nginx.yml -K
+ls -l /etc/nginx/conf.d/ops-handler-demo.conf
+ss -lntp | grep 18099 ; pgrep -a nginx
+```
+
+```text
+playbook ：ok=4 changed=2 failed=1 rescued=0
+ls -l    ：-rw-r--r--. 1 root root 204 9月 17 19:57 /etc/nginx/conf.d/ops-handler-demo.conf
+           → 任务失败了，半成品文件却仍留在磁盘上
+ss       ：无输出（18099 未被监听）
+pgrep    ：1314 master + worker 12616-12619（一个都没换）
+```
+
+结论：**nginx 绑定失败时会放弃新配置、连 worker 都不切换，继续用旧配置跑**。这次的残留文件暂时无害（18099 本来就绑不上），但换一种失败类型（语法合法、逻辑错误）就会在下一次 reload 时引爆。所以「失败时不能留下脏现场」。
+
+### 带回滚的 playbook
+
+```yaml
+  tasks:
+    - name: Apply nginx demo config with rollback
+      block:
+        - name: Render nginx demo config
+          template:
+            src: templates/ops-handler-demo.conf.j2
+            dest: "{{ demo_conf }}"
+            mode: '0644'
+          notify: reload nginx
+
+        - name: Check nginx config
+          command: /usr/sbin/nginx -t
+          register: nginx_test
+          changed_when: false
+
+        - name: Show nginx test result
+          debug:
+            var: nginx_test.stderr_lines
+
+        - name: Flush handlers to reload nginx now
+          meta: flush_handlers
+
+        - name: Verify demo port is listening
+          wait_for:
+            host: 127.0.0.1
+            port: "{{ nginx_demo_port }}"
+            state: started
+            timeout: 5
+
+      rescue:
+        - name: Remove the broken config file
+          file:
+            path: "{{ demo_conf }}"
+            state: absent
+
+        - name: Reload nginx to drop the broken config
+          systemd:
+            name: nginx
+            state: reloaded
+
+        - name: Report the rollback and fail
+          fail:
+            msg: "{{ nginx_demo_port }} 未能生效，已回滚 {{ demo_conf }}"
+```
+
+三个关键点：
+
+- `block` 是正常流程；`rescue` 里的任务**只在 block 中有任务失败时才执行**。（另有关键字 `always`，无论成败都执行，适合上报监控或写审计日志。）
+- `rescue` 里**直接调用模块，不用 `notify`**：救援动作必须「无条件、立即执行」，走 handler 就又多了一个「依赖 changed 才触发」的失效条件。
+- `rescue` 除了清理磁盘（删文件）还要**回退运行状态**（reload）。如果某次故障是「nginx 已成功 reload 了坏配置」，光删文件不够，运行中的 nginx 还在用坏配置跑。
+- 末尾的 `fail:` **必须有**。不写的话 rescue 顺利跑完，Ansible 会认为「这台主机已被救回来」，play 继续并最终报成功，CI/CD 会误判部署成功。
+
+### 实测：18099 失败路径
+
+```text
+TASK [Render nginx demo config]                ：ok        ← 注意：不是 changed
+TASK [Check nginx config]                      ：ok
+TASK [Show nginx test result]                  ：ok
+（完全没有 RUNNING HANDLER）
+TASK [Verify demo port is listening]           ：fatal
+                                                 Timeout when waiting for 127.0.0.1:18099
+TASK [Remove the broken config file]           ：changed
+TASK [Reload nginx to drop the broken config]  ：changed
+TASK [Report the rollback and fail]            ：fatal
+                                                 "18099 未能生效，已回滚 /etc/nginx/conf.d/ops-handler-demo.conf"
+PLAY RECAP                                     ：ok=5 changed=2 failed=1 rescued=1
+
+清理后验证：
+ls        ：没有那个文件或目录（半成品已被删除）
+systemctl ：active
+ss        ：18099 无监听
+pgrep     ：1314 master；worker 换为 13290-13293（rescue 里 reload 过）
+```
+
+`rescued=1` 是 rescue 被触发的签名；`failed=1` 说明 `fail:` 把失败重新抛了出去；`ok=5 changed=2`。
+
+### 最重要的一条：这次没有出现 RUNNING HANDLER
+
+本轮 `Render` 报的是 `ok` 而不是 `changed`，因此 **handler 完全没有触发**。原因是上一轮失败留下的残留文件，其内容与本次渲染结果**完全相同**，checksum 一致 → 不写文件 → 不 notify → 不 reload。
+
+但它**仍然失败并触发了 rescue**——因为 `wait_for` 检查的是「18099 端口在不在监听」这个**持续存在的事实**，而不是「本轮有没有改动」。
+
+由此得到两条认识：
+
+- **handler 只对「本轮的变更」负责，`wait_for` 对「最终状态」负责**，两者职责不同、互相补充。
+- 这个 playbook 是**状态导向（声明式）**而不是动作导向：不管本轮有没有改东西，只要最终状态不对，就要报错并回滚。这正是 Ansible 声明式模型的含义。
+
+顺带纠正一个预估错误：此前按「文件会被重写」预计 `ok=6 changed=4`，实际是 `ok=5 changed=2`，原因就是这次 checksum 命中了。
+
+### 实测：成功路径对照组（`-e nginx_demo_port=8008`）
+
+```bash
+ansible-playbook -i inventory.ini handlers-nginx.yml -e "nginx_demo_port=8008" -K
+ss -lntp | grep 8008 ; curl -sS http://127.0.0.1:8008 ; echo ; pgrep -a nginx
+```
+
+```text
+TASK [Render nginx demo config]                ：changed（上一轮 rescue 已删掉文件，这次要重新创建）
+TASK [Check nginx config]                      ：ok
+TASK [Show nginx test result]                  ：ok
+RUNNING HANDLER [reload nginx]                 ：changed
+TASK [Verify demo port is listening]           ：ok
+PLAY RECAP                                     ：ok=5 changed=2 failed=0 rescued=0
+
+ss    ：LISTEN 127.0.0.1:8008
+curl  ：handler demo ok, version=1
+pgrep ：1314 master；worker 换为 13472-13475
+```
+
+**`rescued=0` 就是「rescue 完全没介入」的判据**：同一个 playbook，失败路径 `rescued=1`、成功路径 `rescued=0`，两种表现都正确。
+
+注意这里 `Render` 又变回 `changed` 了——因为上一轮 rescue 已经把文件删掉，这次需要重新创建。同一份代码在不同状态下报 `changed` 还是 `ok`，取决于**当前系统状态与目标状态的差异**，而不是代码本身。
+
+### 本节收尾清理（已完成）
+
+```bash
+ansible local -i inventory.ini -b -K -m file -a 'path=/etc/nginx/conf.d/ops-handler-demo.conf state=absent'
+ansible local -i inventory.ini -b -K -m systemd -a 'name=nginx state=reloaded'
+ss -lntp | grep -E ':8008|:18099' ; systemctl is-active nginx ; pgrep -a nginx
+```
+
+```text
+file           ：changed=true
+systemd reload ：changed=true，MainPID 仍 1314，ExecReload pid=13471 status=0
+ss             ：无输出（8008 与 18099 都不再监听）
+systemctl      ：active
+pgrep          ：1314 master；worker 换为 13631-13634
+```
+
+最终状态：练习配置文件已删除，nginx 只保留原有 80 端口的服务，18099 的 SELinux 标签保持撤销状态。
+
+### 小节结论
+
+- 失败处理的三步：**清理磁盘 → 回退运行状态 → 明确报红**。缺最后一步，自动化会误判成功。
+- `rescue` 的语义是「把系统恢复到可用状态」，不一定是「撤销本轮改动」；本例中两者恰好重合。
+- 「已回滚」≠「部署成功」，必须用 `fail:` 区分清楚。
+- `changed` 会因为救援动作而增加，说明「部署失败」和「什么都没发生」不是一回事。
+- 同一个 playbook 失败路径 `rescued=1`、成功路径 `rescued=0`，rescue 只在需要时才介入；`Render` 报 `changed` 还是 `ok` 取决于当前状态与目标状态的差异，而非代码本身。
+- 本节不要重做。
+
+## 九、后续学习与验收
+
+1. 多主机部署与 `when` 条件。
+2. 最终完成「一键部署 Nginx 及基础配置」的完整 playbook。
+
+当前 Ansible 安装、本机连通性、Inventory、Ad-hoc 命令、Playbook 基础、变量与模板、handlers、handler 对接 Nginx reload（含 SELinux 端口排查）、`block`/`rescue` 错误处理均已完成，后续不要重做。

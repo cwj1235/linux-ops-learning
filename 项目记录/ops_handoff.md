@@ -1785,12 +1785,28 @@ Linux 运维强化基础检查已经完成。下一步可先做一次阶段复�
 - 实测默认 18099：`ok=4 changed=2 failed=1`，`RUNNING HANDLER` 出现在输出中间（`flush_handlers` 生效的可视化签名），`wait_for` 报 `Timeout when waiting for 127.0.0.1:18099` → 自动复现了之前的 SELinux 拒绑故障。
 - 实测 `-e nginx_demo_port=8008`：`ok=5 changed=2 failed=0`，`ss` 显示 `LISTEN 127.0.0.1:8008`，`curl` 返回 `handler demo ok, version=1`，master 仍 1314、worker 换为 12412-12415。
 - 核心结论：两次 `changed` 完全相同（2），只有 `failed` 不同（1 → 0）。`changed` 表示「做了动作」，`failed` 表示「结果对不对」。
-- 待清理：自检实验重新生成了 `/etc/nginx/conf.d/ops-handler-demo.conf`（当前为 8008），nginx 正在监听 8008。
-- 待决定：18099 是正式 `semanage port -a -t http_port_t -p tcp 18099` 放行，还是保持被拦、当作「可复现的故障演练场」。
+- 残留已清理（2026-09-17）：删除 `/etc/nginx/conf.d/ops-handler-demo.conf`（changed=true）并 reload（changed=true，MainPID 仍 1314）；`ss` 确认 8008 与 18099 都不再监听，worker 换为 12616-12619。
+- 已决定端口约定：练习统一用白名单内的 8008；18099 保持被 SELinux 拦截，作为「可复现的故障演练场」，供下一节 `block/rescue` 使用。不要执行 `semanage port -a` 放行 18099。
 
 ## 当前下一步（最新）
 
-1. 清理自检实验残留（删除 conf 文件 + reload nginx），并决定 18099 的处理方式。
-2. 学习 `block/rescue` 错误处理，把「验证失败之后怎么恢复」补上。
-3. 学习多主机部署与 `when` 条件。
-4. 最终完成「一键部署 Nginx 及基础配置」的完整 playbook。
+## 2026-09-17 block 与 rescue 错误处理完成
+
+- 先确认「没有 rescue」的后果：默认 18099 重跑后 `ok=4 changed=2 failed=1 rescued=0`，`/etc/nginx/conf.d/ops-handler-demo.conf`（204 字节）仍留在磁盘上；worker 12616-12619 一个未换，说明 nginx 绑定失败时会放弃新配置、继续用旧配置跑。
+- `handlers-nginx.yml` 已改写为 `block`（template + notify、`nginx -t`、debug、`meta: flush_handlers`、`wait_for`）+ `rescue`（`file` 删除 conf、`systemd` reload、`fail` 重新抛错）。
+- 实测失败路径：`ok=5 changed=2 failed=1 rescued=1`。`Render` 本轮是 `ok` 而非 `changed`（上一轮残留文件内容与本次渲染完全相同，checksum 命中），因此**没有 RUNNING HANDLER**；但 `wait_for` 仍然失败并触发 rescue，因为它检查的是「端口在不在监听」这一持续状态。
+- 回滚后现场干净：conf 文件已不存在、nginx `active`、18099 无监听、worker 换为 13290-13293。
+- 关键结论：**handler 对本轮变更负责，`wait_for` 对最终状态负责**；失败处理三步是「清理磁盘 → 回退运行状态 → 明确报红（`fail:`）」；「已回滚」≠「部署成功」。
+- 预估纠正：先前按「文件会被重写」预计 `ok=6 changed=4`，实际为 `ok=5 changed=2`。
+
+## 2026-09-17 block/rescue 对照组与本节收尾（已完成）
+
+- 成功路径对照：`-e nginx_demo_port=8008` 实测 `ok=5 changed=2 failed=0 rescued=0`，`RUNNING HANDLER` 出现在中间，`Verify` 通过；`ss` 显示 `LISTEN 127.0.0.1:8008`，`curl` 返回 `handler demo ok, version=1`，master 1314、worker 13472-13475。失败路径 `rescued=1`、成功路径 `rescued=0`，rescue 只在需要时介入。
+- 同一份代码，`Render` 在失败路径报 `ok`、在成功路径报 `changed`，差别来自「当前状态与目标状态的差异」，不是代码本身。
+- 残留已清理：删除 `/etc/nginx/conf.d/ops-handler-demo.conf`（changed=true）+ reload（MainPID 仍 1314）；`ss` 确认 8008 与 18099 均不再监听，nginx `active`，worker 换为 13631-13634。
+- 当前环境状态：nginx 只保留原有 80 端口服务；18099 的 SELinux 标签保持**撤销**状态（未放行），作为可复现的故障演练场。
+
+## 当前下一步（最新）
+
+1. 学习多主机部署与 `when` 条件（单机环境限制下，可用 Docker 容器充当第二台被管节点，`ansible_connection: docker`）。
+2. 最终完成「一键部署 Nginx 及基础配置」的完整 playbook。
