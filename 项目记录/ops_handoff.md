@@ -1808,5 +1808,31 @@ Linux 运维强化基础检查已经完成。下一步可先做一次阶段复�
 
 ## 当前下一步（最新）
 
-1. 学习多主机部署与 `when` 条件（单机环境限制下，可用 Docker 容器充当第二台被管节点，`ansible_connection: docker`）。
+## 2026-09-18 免密 SSH 与多主机（已完成）
+
+- 免密 SSH 已配置：`ssh-keygen -t rsa -b 2048 -N '' -f ~/.ssh/id_rsa` → `cat ~/.ssh/id_rsa.pub >> ~/.ssh/authorized_keys` → `chmod 600`。`ssh -o BatchMode=yes localhost 'hostname; whoami'` 返回 `centos100` / `atguigu`，退出码 0。
+- 主机指纹已预热：`ssh -o StrictHostKeyChecking=no 127.0.0.1 ...`（`localhost` 与 `127.0.0.1` 在 known_hosts 里是两个条目，Ansible 首次连 `127.0.0.1` 会卡在指纹确认）。
+- 新建 `inventory-multi.ini`：`[local]`（localhost，`ansible_connection=local`）、`[ssh_nodes]`（centos100，`ansible_host=127.0.0.1`、`ansible_user=atguigu`）、`[practice:children]` 组嵌套、`[practice:vars] practice_root=.../multi-demo`。
+- 新建 `multi-host.yml`：`hosts: practice`、`gather_facts: true`、按 `{{ inventory_hostname }}` 分别建目录和写 `info.txt`、两个用 `when: inventory_hostname in groups['...']` 分支的任务。
+- 实测：`--list-hosts` 两台；执行后两台各 `ok=6 changed=2 skipped=1`；`Gathering Facts` 成为独立任务。
+- 关键观察：`inventory_hostname` 两台不同（localhost / centos100），但 `ansible_hostname` 都是 `centos100` → 同一台机器两个身份；两台 facts 完全相同，能区分的只有 inventory 与变量。
+- `--limit centos100`：`--list-hosts` 只列 1 台，执行后 RECAP 只有 centos100，`ok=6 changed=0 skipped=1`。`--limit` 只缩范围、不改变 `when` 判断。
+- 新增文件：`inventory-multi.ini`、`multi-host.yml`、`multi-demo/localhost/`、`multi-demo/centos100/`（练习产物，收尾时清理）。
+
+## 当前下一步（最新）
+
+1. 补做产物验证：`cat multi-demo/*/info.txt` 确认两台内容差异符合预期。
 2. 最终完成「一键部署 Nginx 及基础配置」的完整 playbook。
+## 2026-09-18 一键部署 Nginx 完整 playbook 与 SELinux 标签加固（已完成）
+
+- 新增 `inventory-prod.ini`、`templates/index.html.j2`、`templates/nginx-site.conf.j2`、`nginx-deploy.yml`（完整代码见 `学习总结/ops_ansible_basics.md` 第十节）。
+- 关键设计：`site_port` 只写在 inventory 主机变量（playbook `vars` 会覆盖 inventory 主机变量）；`serial: 1` 实现滚动更新（输出出现两次 PLAY）；`block` 内 `template`+notify → `meta: flush_handlers` → `uri` + `failed_when: site_name not in site_resp.content` 自检；`rescue` 三步删 conf → reload → `fail`。
+- 实测：首跑两台各 `ok=9 changed=4`；幂等复跑两台各 `ok=8 changed=0` 且无 handler；`chcon -t var_t` 破坏后 `--limit localhost` 得 `ok=8 changed=1` 并自愈；删目录+conf 后 `--limit centos100` 得 `ok=9 changed=4`，新目录一出生即 `httpd_sys_content_t`，8009 返回 200。
+- SELinux 定案：`copy`/`template` 会自动套策略默认标签，`file` 模块（目录/文件）都不会自动套；`file` 必须显式 `setype: httpd_sys_content_t`。修复既有偏差用 `restorecon -Rv`（策略已有 `/var/www(/.*)?` 规则，无需 `semanage fcontext`）；`chcon` 只是临时的。
+- 环境最终状态：nginx master 仍 1314；`127.0.0.1:8008` 与 `127.0.0.1:8009` 各返回 200；`/var/www/ops-demo-*` 与 `/etc/nginx/conf.d/ops-demo-*.conf` 保留；`18099` 仍被 SELinux 拦截（`http_port_t` 白名单未加）；`multi-demo/` 已删除；`/var/www` 自身 `var_t` 属机器基线偏差，未动。
+
+## 当前下一步（最新）
+
+1. 本轮记录已写入 `学习总结/ops_ansible_basics.md`（第十节）、`项目记录/memory.md`、`项目记录/ops_handoff.md`、`项目记录/ops_command_history.md` 与 `README.md`，等待用户提交（PowerShell + 代理）。
+2. Ansible 阶段主线结束。可选方向：Roles 与 `ansible-galaxy`、Ansible Vault、动态 inventory、`ansible-lint`/CI、在第二台真实节点上验证滚动发布。
+3. `README.md` 末尾「下一步：只读检查 `/var/lib/redis-noeviction-20260914` …」是 Redis 阶段的历史停点、已经过时，是否清理由用户决定。

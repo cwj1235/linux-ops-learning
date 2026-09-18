@@ -1149,9 +1149,413 @@ pgrep          ：1314 master；worker 换为 13631-13634
 - 同一个 playbook 失败路径 `rescued=1`、成功路径 `rescued=0`，rescue 只在需要时才介入；`Render` 报 `changed` 还是 `ok` 取决于当前状态与目标状态的差异，而非代码本身。
 - 本节不要重做。
 
-## 九、后续学习与验收
+## 九、多主机部署与 when 条件（已完成）
 
-1. 多主机部署与 `when` 条件。
-2. 最终完成「一键部署 Nginx 及基础配置」的完整 playbook。
+### 为什么以及怎么模拟多主机
 
-当前 Ansible 安装、本机连通性、Inventory、Ad-hoc 命令、Playbook 基础、变量与模板、handlers、handler 对接 Nginx reload（含 SELinux 端口排查）、`block`/`rescue` 错误处理均已完成，后续不要重做。
+之前的练习全是单机（`hosts: local`）。Ansible 的价值在于「一次编写、批量下发」，所以必须先有「多台被管节点」。本机只有一台 CentOS 虚拟机，因此用**两个 managed node 指向同一台机器**来模拟：
+
+- `localhost` —— 走 local 连接（不经 SSH）
+- `centos100` —— 走 SSH 连接，连到 `127.0.0.1`
+
+### 免密 SSH 登录（Ansible 的前置基本功）
+
+现状探测：
+
+```bash
+systemctl is-active sshd ; ls -la ~/.ssh/
+ssh -o BatchMode=yes localhost true ; echo "退出码=$?"
+```
+
+```text
+sshd     ：active
+~/.ssh   ：没有那个文件或目录
+ssh 自连 ：退出码=255，Permission denied (publickey,gssapi-keyex,gssapi-with-mic,password)
+```
+
+配置：
+
+```bash
+cd ~
+mkdir -p ~/.ssh ; chmod 700 ~/.ssh
+ssh-keygen -t rsa -b 2048 -N '' -f ~/.ssh/id_rsa
+cat ~/.ssh/id_rsa.pub >> ~/.ssh/authorized_keys ; chmod 600 ~/.ssh/authorized_keys
+ssh -o BatchMode=yes localhost 'hostname; whoami' ; echo "退出码=$?"
+```
+
+```text
+centos100
+atguigu
+退出码=0
+```
+
+要点：
+
+- `ssh-keygen -t rsa -b 2048 -N '' -f ~/.ssh/id_rsa`：`-t` 类型、`-b` 位数、`-N ''` 空 passphrase（Ansible 才能无人值守调用）、`-f` 保存路径。生成 `id_rsa`（私钥，权限 600，绝不外传）与 `id_rsa.pub`（公钥，可公开）。
+- 免密原理：公钥放进目标机 `~/.ssh/authorized_keys`；登录时服务器用公钥出题、客户端用私钥解答，全程不传密码。
+- 必须用 `>>` 追加，不能用 `>`（会清掉已有授权公钥）。
+- 本机同用户可直接 `cat >>`；**远程机器的标准做法是 `ssh-copy-id user@host`**。
+- `chmod 600 authorized_keys` 不能省：sshd 的 `StrictModes` 会拒绝 group/other 可写的授权文件，表现为「密钥明明放对了却还要输密码」。
+- `BatchMode=yes` 禁止交互输密码，既能验证免密，也能避免脚本卡在密码提示上。
+- 第一次 ssh 会提示接受主机指纹并写入 `~/.ssh/known_hosts`；`ssh-keygen` 输出的 randomart 图是指纹的可视化，用于人工比对。
+
+### 多主机 inventory
+
+```ini
+[local]
+localhost ansible_connection=local
+
+[ssh_nodes]
+centos100 ansible_host=127.0.0.1 ansible_user=atguigu
+
+[practice:children]
+local
+ssh_nodes
+
+[practice:vars]
+practice_root=/home/atguigu/ansible-practice/multi-demo
+```
+
+- `[practice:children]` 是**组的嵌套**（组的组），大型 inventory 的主要组织手段；`[practice:vars]` 给组内所有主机设变量。
+- `ansible_connection` 默认就是 `ssh`，所以 `centos100` 不用写；`localhost` 必须显式写 `local`。
+
+**先接受主机指纹**（Ansible 高频坑）：
+
+```bash
+ssh -o StrictHostKeyChecking=no 127.0.0.1 'hostname; whoami' ; echo "预热退出码=$?"
+```
+
+```text
+Warning: Permanently added '127.0.0.1' (ECDSA) to the list of known hosts.
+centos100 / atguigu / 预热退出码=0
+```
+
+`localhost` 早已在 `known_hosts` 里，但 `127.0.0.1` 对 SSH 来说是另一台「主机」（按主机名做键）。Ansible 首次连未知主机会卡在 `Are you sure you want to continue connecting?`。生产做法是先用一次非 BatchMode 的 ssh 接受指纹——**把需要人确认的步骤提前消灭**。
+
+解析与连通性：
+
+```bash
+ansible-inventory -i inventory-multi.ini --graph
+ansible -i inventory-multi.ini all -m ping
+```
+
+```text
+@all:
+  |--@practice:
+  |  |--@local:      → localhost
+  |  |--@ssh_nodes:  → centos100
+  |--@ungrouped:     （空）
+
+两台均 SUCCESS / pong，discovered_interpreter_python 都是 /usr/bin/python
+```
+
+`ansible-inventory --graph` 不改任何东西，专门用来看「Ansible 到底把这份 inventory 解析成了什么」，是排查「任务没跑在我以为的主机上」的第一个命令。
+
+### 多主机 playbook
+
+`multi-host.yml` 关键结构：
+
+```yaml
+- name: Multi host practice
+  hosts: practice          # 目标是组，不是单台
+  gather_facts: true       # 多主机必须打开；when 与模板常依赖 facts
+  tasks:
+    - debug：打印 inventory_hostname / ansible_host / ansible_hostname / distribution / memtotal_mb / python
+    - debug：打印组变量 practice_root
+    - file ：创建 {{ practice_root }}/{{ inventory_hostname }} 目录
+    - copy ：写入 {{ practice_root }}/{{ inventory_hostname }}/info.txt
+    - debug + when: inventory_hostname in groups['ssh_nodes']
+    - debug + when: inventory_hostname in groups['local']
+```
+
+```bash
+ansible-playbook -i inventory-multi.ini multi-host.yml --syntax-check
+ansible-playbook -i inventory-multi.ini multi-host.yml --list-hosts
+ansible-playbook -i inventory-multi.ini multi-host.yml
+```
+
+```text
+--syntax-check：playbook: multi-host.yml
+--list-hosts  ：hosts (2): centos100 / localhost（pattern: [u'practice']，u'' 是 Python 2 的 unicode 表示法，不是错误）
+```
+
+关键执行输出：
+
+```text
+TASK [Gathering Facts]               ok: [localhost] / ok: [centos100]
+TASK [Show per-host identity]
+  localhost => inventory_hostname=localhost  ansible_host=localhost  ansible_hostname=centos100 distribution=CentOS 7.9 memtotal_mb=1980 python=2.7.5
+  centos100 => inventory_hostname=centos100  ansible_host=127.0.0.1  ansible_hostname=centos100 distribution=CentOS 7.9 memtotal_mb=1980 python=2.7.5
+TASK [Show group variable]           两台都读到 /home/atguigu/ansible-practice/multi-demo
+TASK [Create per-host directory]     changed: [localhost] / changed: [centos100]
+TASK [Write per-host info file]      changed: [localhost] / changed: [centos100]
+TASK [Task only for the SSH group]   skipping: [localhost] / ok: [centos100]
+TASK [Task only for the local group] ok: [localhost] / skipping: [centos100]
+
+PLAY RECAP
+centos100 : ok=6 changed=2 unreachable=0 failed=0 skipped=1 rescued=0 ignored=0
+localhost : ok=6 changed=2 unreachable=0 failed=0 skipped=1 rescued=0 ignored=0
+```
+
+### 三个主机名变量的区别
+
+| 变量 | 含义 | 谁定义 |
+| --- | --- | --- |
+| `inventory_hostname` | Ansible 里的主机名 | 写在 inventory 里的 |
+| `ansible_host` | 真实连接地址 | 显式指定；未指定时默认等于 `inventory_hostname` |
+| `ansible_hostname` | 远端机器自己报出的主机名 | 远端 facts |
+
+本例中 `inventory_hostname` 不同（`localhost` vs `centos100`），但 `ansible_hostname` 都是 `centos100`——**同一台机器两个身份的直接证据**。生产里前两者常等于第三个，但概念完全不同；三者对比是发现「连错机器」最快的手段。
+
+补充：`ansible_host | default('local')` 里的 `default` 不会触发，因为 `ansible_host` 永不为空（Ansible 自动填 `inventory_hostname`），写兜底是多余的。
+
+### `--limit`
+
+```bash
+ansible-playbook -i inventory-multi.ini multi-host.yml --limit centos100 --list-hosts
+ansible-playbook -i inventory-multi.ini multi-host.yml --limit centos100
+```
+
+```text
+--list-hosts：hosts (1): centos100
+执行        ：PLAY RECAP 只有 centos100 一行，ok=6 changed=0 skipped=1
+```
+
+- `--limit` 临时缩小执行范围，不改 inventory；生产上用于灰度发布与定点修复。
+- **先 `--list-hosts` 确认范围再执行**：`--limit` 写错一个字母，可能从「只改一台」变成「全量变更」。
+- 也支持组名（`--limit ssh_nodes`）和逗号列表（`--limit centos100,localhost`）。
+- `--limit` 只限制**执行范围**，不改变每台主机自己的 `when` 判断：centos100 依旧被 local 组的任务跳过。
+- 本轮 `changed=0`：上一轮全量执行已把目录与文件建好，这次复查发现目标状态已达成、一个动作都不做。**幂等性在多主机上就是「两台各自幂等、互不干扰」。**
+
+### 已知限制与未验证项
+
+- 物理上只有一台机器，两个 managed node 读到的 facts **完全相同**，所以「按 facts 分支」的 `when` 看不出差异；能区分的只有 inventory 与变量。等以后有第二台真机或容器，这套 playbook 可原样复用。
+- `multi-demo/localhost/info.txt` 与 `multi-demo/centos100/info.txt` 的实际内容已在后续补做 `cat` 与 `find` 核对（见命令履历 2026-09-18 小节）：两台的 `inventory_hostname`/`ansible_host` 不同、`ansible_hostname` 相同，站点内容与预期一致。第九节「尚未 cat」的未验证项就此关闭；`multi-demo/` 已在第十节收尾时清理。
+
+### 小节结论
+
+- 多主机能力建立在「免密 SSH + 结构化 inventory」两个基础上，这两件事本身就是运维基本功。
+- `inventory_hostname` / `ansible_host` / `ansible_hostname` 含义不同，混用会导致「连错机器」或「判断错主机」。
+- 多主机是并行执行的，输出顺序不保证；判断结果看 `PLAY RECAP`，不要看顺序。
+- `skipped` 是多主机里最主要的新信息；`--list-hosts` 是防误操作的第一道闸。
+- 本节不要重做。
+
+## 十、一键部署 Nginx 完整 playbook（已完成）
+
+### 目标
+
+把前九节的能力串成一条完整流水线：装 nginx → 建站点目录 → 部署首页 → 部署站点配置 → 热加载 → HTTP 自检 → 失败回滚，并要求幂等、可回滚、可移植（换一台机器也能一次跑对）。
+
+### 新增文件
+
+`inventory-prod.ini`（两台机器的差异只写在 inventory 里）：
+
+```ini
+[web]
+localhost ansible_connection=local site_port=8008
+centos100 ansible_host=127.0.0.1 ansible_user=atguigu site_port=8009
+```
+
+`templates/index.html.j2`：
+
+```html
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>{{ site_name }} @ {{ inventory_hostname }}</title>
+</head>
+<body>
+  <h1>{{ site_name }}</h1>
+  <ul>
+    <li>inventory_hostname: {{ inventory_hostname }}</li>
+    <li>ansible_hostname: {{ ansible_hostname }}</li>
+    <li>listen port: {{ site_port }}</li>
+    <li>distribution: {{ ansible_distribution }} {{ ansible_distribution_version }}</li>
+    <li>site_root: {{ site_root }}</li>
+  </ul>
+</body>
+</html>
+```
+
+`templates/nginx-site.conf.j2`：
+
+```nginx
+# Managed by Ansible. Do not edit by hand.
+# inventory_hostname: {{ inventory_hostname }}
+
+server {
+    listen 127.0.0.1:{{ site_port }};
+    server_name _;
+
+    root {{ site_root }};
+    index index.html;
+
+    location / {
+        try_files $uri $uri/ =404;
+    }
+}
+```
+
+`nginx-deploy.yml`：
+
+```yaml
+---
+- name: Deploy nginx site
+  hosts: web
+  gather_facts: true
+  become: true
+  serial: 1
+
+  vars:
+    site_name: ops-demo
+    site_root: "/var/www/{{ site_name }}-{{ inventory_hostname }}"
+    conf_file: "/etc/nginx/conf.d/{{ site_name }}-{{ inventory_hostname }}.conf"
+
+  tasks:
+    - name: Show target node info
+      debug:
+        msg: "node={{ inventory_hostname }} port={{ site_port }} root={{ site_root }}"
+
+    - name: Install nginx
+      yum:
+        name: nginx
+        state: present
+      when: ansible_os_family == "RedHat"
+
+    - name: Create site root
+      file:
+        path: "{{ site_root }}"
+        state: directory
+        mode: '0755'
+        setype: httpd_sys_content_t
+
+    - name: Deploy index page
+      template:
+        src: templates/index.html.j2
+        dest: "{{ site_root }}/index.html"
+        mode: '0644'
+
+    - name: Apply nginx site config with rollback
+      block:
+        - name: Deploy nginx site config
+          template:
+            src: templates/nginx-site.conf.j2
+            dest: "{{ conf_file }}"
+            mode: '0644'
+          notify: reload nginx
+
+        - name: Flush handlers to apply config now
+          meta: flush_handlers
+
+        - name: Verify site is serving
+          uri:
+            url: "http://127.0.0.1:{{ site_port }}/"
+            return_content: true
+          register: site_resp
+          failed_when: site_name not in site_resp.content
+
+        - name: Show verification result
+          debug:
+            msg: "{{ inventory_hostname }} HTTP {{ site_resp.status }}，页面已包含站点名 {{ site_name }}"
+
+      rescue:
+        - name: Remove the broken site config
+          file:
+            path: "{{ conf_file }}"
+            state: absent
+
+        - name: Reload nginx after rollback
+          systemd:
+            name: nginx
+            state: reloaded
+
+        - name: Report rollback and fail
+          fail:
+            msg: "{{ inventory_hostname }} 站点验证失败，已回滚 {{ conf_file }}"
+
+  handlers:
+    - name: reload nginx
+      systemd:
+        name: nginx
+        state: reloaded
+```
+
+### 变量优先级：为什么 `site_port` 只写在 inventory 里
+
+- 实测两台分别打印 `node=localhost port=8008` 与 `node=centos100 port=8009`，同一份 playbook、两种参数。
+- 关键设计：`site_port` **只**定义在 inventory 的主机变量里，playbook 的 `vars` 里故意不写。因为 playbook `vars` 的优先级**高于** inventory 主机变量，一旦在 `vars` 里写了 `site_port: 8008`，centos100 的 8009 就会被覆盖。
+- 所以「一份 playbook 服务多台机器」的正确做法是：**差异放进 inventory（主机变量/组变量），共性放进 playbook `vars`**（本例共性只有 `site_name`，派生量 `site_root`/`conf_file` 用 `inventory_hostname` 拼出来）。
+
+### `serial: 1`：滚动更新的雏形
+
+- `serial: 1` 表示「一次只在一台（批）主机上跑完整流程」，于是输出里出现**两次** `PLAY [Deploy nginx site]`，每台一段。
+- 价值：一台跑完并且自检通过，才轮到下一台；某台失败时后面的机器不会被牵连。配合 `--limit` 就能只对指定机器发布（本节两个实验都用了它）。
+
+### `--list-tasks` 能看到什么
+
+- 只列出 7 个任务。`meta: flush_handlers` **不是任务**（它是执行控制），`rescue` 里的任务也不在正常路径中列出。
+
+### 四次执行的结果
+
+| 场景 | 命令 | 结果 |
+|---|---|---|
+| 首次部署（两台） | `ansible-playbook -i inventory-prod.ini nginx-deploy.yml -K` | 两次 PLAY，两台各 `ok=9 changed=4`；8008/8009 各返回 200，页面含各自的端口与站点根目录 |
+| 幂等复跑（两台） | 同上 | 两台各 `ok=8 changed=0`，无 `RUNNING HANDLER` |
+| 标签被改坏后自愈 | `sudo chcon -t var_t /var/www/ops-demo-localhost` 再 `--limit localhost` | `ok=8 changed=1`，`Create site root` 报 changed，标签回到 `httpd_sys_content_t` |
+| 目录从零重建 | `sudo rm -rf /var/www/ops-demo-centos100 /etc/nginx/conf.d/ops-demo-centos100.conf` 再 `--limit centos100` | `ok=9 changed=4`（与首跑一致），目录一出生即 `httpd_sys_content_t`，8009 返回 200 |
+
+- `ok=9` 与 `ok=8` 差的那 1 个就是 handler：首跑有 `RUNNING HANDLER [reload nginx]`，幂等复跑没有。所以 **9 = 8 个任务 + 1 个 handler**。
+- **`ok` 是「成功执行次数」，包含发生变更的那些**（`ok=9 changed=4` = 9 次执行里有 4 次做了动作）。看「有没有干活」看 `changed`，看「跑了几个任务」看 `ok`。
+- 第 3 行那次 `changed=1` **完全来自 SELinux 标签**：内容、属主、权限、mode 全都没变。结论：`changed` 是「任何被声明的属性不一致」，标签也算在内；幂等的前提是**所有属性（含标签）都对齐**。
+- 第 4 行附带一个推理技巧：`Create site root` 与 `Deploy index page` 报 `changed`，即可确认目录是被重建的（内容一致却报 changed，只可能是「从不存在到存在」），不必额外 `ls` 确认 `rm -rf` 是否生效。
+
+### 自检与回滚（继承第八节）
+
+- `uri` 模块 + `failed_when: site_name not in site_resp.content`：不满足于 HTTP 200，还要求页面内容含站点名，避免「服务通了但发错站点」。
+- `meta: flush_handlers` 放在校验之前：先 reload 再校验，否则校验的是旧配置。
+- `rescue` 三步：删掉坏配置 → `systemd: state=reloaded` 回退运行状态 → `fail:` 明确报红。「已回滚」不等于「部署成功」。
+
+### SELinux 标签加固（本节最值钱的发现）
+
+现象：部署成功后 `index.html` 标签正确（`system_u:object_r:httpd_sys_content_t:s0`），但站点目录 `/var/www/ops-demo-*` 是 `unconfined_u:object_r:var_t:s0`；`matchpathcon -V` 判定目录 `has context ...var_t:s0, should be ...httpd_sys_content_t:s0`。
+
+排查与定案（前四步全部只读，最后才动手）：
+
+1. `ls -ldZ /var/www` → `/var/www` 自身就是 `var_t`，所以「继承父目录类型」得到的就是 `var_t`。
+2. `sudo semanage fcontext -l | grep '^/var/www'` → 策略数据库里**已有** `/var/www(/.*)?  all files  system_u:object_r:httpd_sys_content_t:s0`，说明目录标签确实不符合策略预期。
+3. `sudo matchpathcon -V <路径>` → 权威判官，直接给出「实际值 vs 策略默认值」。
+4. `sudo grep -i 'denied' /var/log/audit/audit.log | tail -n 5` → 最新一条 denial 是前一天 nginx 绑 18099 的 `name_bind`，**本次部署零 AVC**。所以「现在还能 200」不是被拒绝后放行，而是当前策略压根没拒绝（具体由哪条 allow 规则兜着**未做 `sesearch` 验证，不猜**）。
+5. 对照实验一：`sudo mkdir -p /var/www/labeltest-bash` → `var_t`（没人套标签时，新目录继承父目录类型）。
+6. 对照实验二：`ansible -m file -a 'path=/var/www/labeltest state=directory mode=0755'` → 返回值 `"secontext": "unconfined_u:object_r:var_t:s0"`；`ansible -m file -a 'path=/var/www/touchtest state=touch'` → 同样是 `var_t`。
+7. 对照实验三：`ansible -m copy -a 'content="hello" dest=/var/www/labeltest/index.html mode=0644'` → 返回值 `"secontext": "system_u:object_r:httpd_sys_content_t:s0"`。
+
+结论：
+
+- **`copy` / `template` 落地文件时会自动套策略默认 SELinux 标签；`file` 模块不会自动套**（建目录、建文件都不套）。分界线是「**模块**」，不是「目录 vs 文件」——`file` 建文件（`state=touch`）实测也没套。
+- `file` 模块**有** SELinux 能力（参数 `setype`/`seuser`/`serole`/`selevel`），只是不会自动补默认值。所以用 `file` 建的目录必须显式写 `setype`，否则换机器或重建目录时标签必错（100% 复现，不是偶发）。
+- 三个命令的分工要分清：
+  - `semanage fcontext -a -t <类型> "<路径正则>"`：改**策略数据库里的规则**，用于自建的非标准路径（如 `/srv/www`）。
+  - `restorecon -Rv <路径>`：把规则**盖到磁盘上**；`-n` 是 dry-run。**本例策略里已有 `/var/www(/.*)?` 规则，所以不需要 `semanage fcontext`，`restorecon` 就够。**
+  - `chcon -t <类型> <路径>`：只改当前文件标签、不写进策略，会被下一次 `restorecon`/`fixfiles` 冲掉；适合临时验证，也正好用来制造故障。
+  - `restorecon` 默认只改 **type**，不动 user/role/range（连 user/role 一起改要加 `-F`）。SELinux 的访问决策看的是 **type**，所以 `unconfined_u:object_r:httpd_sys_content_t:s0` 与 `system_u:object_r:httpd_sys_content_t:s0` 都能正常工作。
+- 落地加固：给 `Create site root` 加一行 `setype: httpd_sys_content_t`，此后「标签被改坏」与「目录从零创建」两条路径都实测通过。这一行只声明 type，user 部分仍是 `unconfined_u`——Ansible 只替换你显式给出的字段。
+- 另一个观察：`matchpathcon -V /var/www` 显示 `/var/www` 自身也不符合策略（`var_t` vs `httpd_sys_content_t`）。这是**机器基线偏差**、不是本次引入的，也不影响本站点访问，故意没有动它（想对齐可用 `sudo restorecon -v /var/www`）。
+
+### 清理与最终状态
+
+- 清理：只删运行时产物 `multi-demo/`（与之前删掉的 `template-demo/`、`handlers-demo/` 同类）。所有 `.yml` / `.ini` / `templates/*.j2` 保留作为教案；`/var/www/ops-demo-*` 与 `/etc/nginx/conf.d/ops-demo-*.conf` 保留作为可 `curl` 演示的成品。
+- 最终状态：nginx master 仍是 `1314`；`127.0.0.1:8008`（localhost 身份）与 `127.0.0.1:8009`（centos100 身份）各返回 200；两台全量复跑 `ok=8 changed=0`；`18099` 仍保持被 SELinux 拦截，`http_port_t` 白名单里没有它。
+
+### 小节结论
+
+- 一份生产可用的部署 playbook = **被声明全的幂等条件**（内容、权限、标签、服务状态）+ **差异放进 inventory** + **滚动更新（`serial`）** + **自检（`uri` + `failed_when`）** + **失败回滚（`rescue`）** + **明确报红（`fail`）**。
+- 「Ansible 跑绿了」只代表它**声明的**那些属性对齐了；没声明的属性（本例的 SELinux 标签）它会如实留给你。所以每引入一类资源，都要问一句「这个模块会不会顺手把这类属性也管起来」，不确定就用返回值里的 `secontext`、`ls -Z`、`matchpathcon -V` 验证。
+- 判断结果只看 `PLAY RECAP` 的 `ok/changed/failed/rescued/skipped`，再叠加业务面验证（`ss`、`curl`、`ls -Z`）。
+- 本节不要重做。
+
+## 十一、后续学习与验收
+
+Ansible 阶段十个小节全部完成：安装与本机连通性、Inventory、Ad-hoc 命令、Playbook 基础、变量与模板、handlers、handler 对接 Nginx reload（含 SELinux 端口排查）、`block`/`rescue` 错误处理、多主机与 `when` 条件、一键部署 Nginx 完整 playbook（含 SELinux 标签加固）。以上内容不要重做。
+
+尚未开始的下一步方向（待用户选择，不属于已验收范围）：Roles 与 `ansible-galaxy`、Ansible Vault、动态 inventory、`ansible-lint`/CI 集成、在第二台真实机器或容器上验证滚动发布。

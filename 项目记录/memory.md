@@ -858,4 +858,27 @@ GitHub Actions 或同类流水线，实现测试、构建、镜像或发布、�
 - 预估纠正：先前预计 `ok=6 changed=4`，实际 `ok=5 changed=2`。
 - 成功路径对照：`-e nginx_demo_port=8008` 实测 `ok=5 changed=2 failed=0 rescued=0`，ss 显示 `LISTEN 127.0.0.1:8008`，curl 返回 `handler demo ok, version=1`，master 1314、worker 13472-13475。失败路径 `rescued=1`、成功路径 `rescued=0`。同一份代码 `Render` 在不同路径下分别报 `ok`/`changed`，差别来自当前状态与目标状态的差异。
 - 残留已清理：删除 conf（changed=true）+ reload（MainPID 仍 1314）；8008 与 18099 均不再监听，nginx active，worker 换为 13631-13634。18099 的 SELinux 标签保持撤销状态。
-- 本节不要重做。下一步：多主机部署与 `when` 条件（单机限制下可用 Docker 容器充当第二台被管节点，`ansible_connection: docker`），最后做「一键部署 Nginx」完整 playbook。
+- 本节不要重做。
+
+## 2026-09-18 多主机部署与 when 条件完成
+
+- 免密 SSH 已配置：`ssh-keygen -t rsa -b 2048 -N '' -f ~/.ssh/id_rsa` + `cat ~/.ssh/id_rsa.pub >> ~/.ssh/authorized_keys` + `chmod 600`。`ssh -o BatchMode=yes localhost 'hostname; whoami'` → `centos100` / `atguigu`，退出码 0。`chmod 600 authorized_keys` 不能省（sshd StrictModes 会拒绝 group/other 可写的授权文件）。
+- 主机指纹预热：`localhost` 与 `127.0.0.1` 在 known_hosts 里是两个条目，Ansible 首次连 `127.0.0.1` 会卡在指纹确认，需先手动 ssh 接受一次。
+- 新建 `inventory-multi.ini`：`[local]`（localhost，local 连接）+ `[ssh_nodes]`（centos100，`ansible_host=127.0.0.1`、`ansible_user=atguigu`）+ `[practice:children]` 组嵌套 + `[practice:vars] practice_root=.../multi-demo`。新建 `multi-host.yml`：`hosts: practice`、`gather_facts: true`、按 `inventory_hostname` 分别建目录写文件、两个 `when: inventory_hostname in groups[...]` 分支任务。
+- 实测：两台各 `ok=6 changed=2 skipped=1`；`--limit centos100` 时 `ok=6 changed=0 skipped=1`（幂等）。`--limit` 只缩小执行范围，不改变每台主机的 `when` 判断。
+- 关键概念：`inventory_hostname`（inventory 里的名字）≠ `ansible_host`（真实连接地址，未指定时默认等于 inventory_hostname）≠ `ansible_hostname`（远端 facts 报出的主机名）。本例两台 inventory_hostname 不同但 ansible_hostname 都是 centos100 → 同一台机器两个身份。两台 facts 完全相同，能区分的只有 inventory 与变量。
+- 已知限制：物理上只有一台机器，按 facts 分支的 `when` 看不出差异。`u'...'` 是 Python 2 的 unicode 表示法，不是错误。多主机并行执行，输出顺序不保证，判断看 `PLAY RECAP`。
+- 未验证：`multi-demo/*/info.txt` 的实际内容尚未 `cat` 查看。练习产物 `inventory-multi.ini`、`multi-host.yml`、`multi-demo/` 待决定保留或清理。
+- 本节不要重做。下一步：产物验证，然后做「一键部署 Nginx」完整 playbook。
+## 2026-09-18 一键部署 Nginx 完整 playbook 与 SELinux 标签加固（已完成）
+
+- 新增 `inventory-prod.ini`（`[web]`：`localhost ansible_connection=local site_port=8008`、`centos100 ansible_host=127.0.0.1 ansible_user=atguigu site_port=8009`）、`templates/index.html.j2`、`templates/nginx-site.conf.j2`、`nginx-deploy.yml`（`hosts: web`、`become: true`、`serial: 1`；`site_root`/`conf_file` 由 `site_name` + `inventory_hostname` 拼出；任务链 = debug → `yum` 装 nginx（`when: ansible_os_family == "RedHat"`）→ `file` 建站点目录（带 `setype`）→ `template` 部署首页 → `block`（`template`+notify → `meta: flush_handlers` → `uri` 校验页面含站点名 → debug）/ `rescue`（删 conf → `systemd` reload → `fail`））。
+- 变量优先级实测：`site_port` 只写在 inventory 主机变量里、playbook `vars` **故意不写** → `node=localhost port=8008`、`node=centos100 port=8009`。playbook `vars` 优先级高于 inventory 主机变量，写进 `vars` 就会把 8009 覆盖掉。
+- 四次执行：首跑两台各 `ok=9 changed=4`；幂等复跑两台各 `ok=8 changed=0` 且无 `RUNNING HANDLER`；`sudo chcon -t var_t /var/www/ops-demo-localhost` 后 `--limit localhost` 复跑得 `ok=8 changed=1`、标签自愈；删掉 centos100 的站点目录与 conf 后 `--limit centos100` 复跑得 `ok=9 changed=4`、目录一出生即 `httpd_sys_content_t`、8009 返回 200。
+- `ok` 是「成功执行次数」并**包含 changed**（首跑 9 = 8 个任务 + 1 个 handler）。`changed` 也可以只来自 SELinux 标签差异（那次 `changed=1` 的内容、权限、属主全都没变）。
+- SELinux 定案：`copy`/`template` 落地文件会自动套策略默认标签；**`file` 模块建目录和建文件（`state=touch`）都不会自动套**（模块返回值里的 `secontext` 直接可见）。分界线是「模块」而不是「目录/文件」。`file` 模块有 `setype`，显式写才会设（自愈与从零创建两条路径均已实测）。
+- 命令分工：`semanage fcontext` 改策略规则（只有非标准路径才需要）；`restorecon` 把规则盖到磁盘（`-n` dry-run，默认只改 type，`-F` 连 user/role 一起改）；`chcon` 临时改、会被 `restorecon`/`fixfiles` 冲掉。本例策略已有 `/var/www(/.*)?` → `httpd_sys_content_t`，所以只需 `restorecon`。
+- `matchpathcon -V` 是标签的权威判官；`audit.log` 显示本次部署零 AVC（最新 denial 仍是前一天 18099 的 `name_bind`）→ 现在能 200 不是被拒绝后放行，而是策略没拒绝；具体哪条 allow 规则兜着**未用 `sesearch` 验证，不猜**。
+- 机器基线偏差：`/var/www` 自身是 `var_t`（`matchpathcon` 判 should be `httpd_sys_content_t`），非本次引入、不影响站点访问，故意未动。
+- 清理：只删 `multi-demo/`；`.yml`/`.ini`/`templates/*.j2` 全部保留，`/var/www/ops-demo-*` 与 `/etc/nginx/conf.d/ops-demo-*.conf` 保留作演示。第九节「`multi-demo/*/info.txt` 尚未 cat」的遗留项已补验并关闭，`multi-host.yml` 的全量复跑不再需要。
+- 本节不要重做。Ansible 阶段十个小节全部完成，下一步方向待定。

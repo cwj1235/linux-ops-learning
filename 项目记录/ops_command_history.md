@@ -4653,3 +4653,269 @@ ss             ：无输出（8008 与 18099 都不再监听）
 systemctl      ：active
 pgrep          ：1314 master；worker 换为 13631-13634
 ```
+
+## 2026-09-18 多主机与 when 条件
+
+### 免密 SSH（前置条件）
+
+```bash
+systemctl is-active sshd ; ls -la ~/.ssh/
+ssh -o BatchMode=yes -o StrictHostKeyChecking=no localhost true ; echo "ssh自连退出码=$?"
+hostname ; hostname -I
+
+cd ~
+mkdir -p ~/.ssh ; chmod 700 ~/.ssh
+ssh-keygen -t rsa -b 2048 -N '' -f ~/.ssh/id_rsa
+cat ~/.ssh/id_rsa.pub >> ~/.ssh/authorized_keys ; chmod 600 ~/.ssh/authorized_keys
+ssh -o BatchMode=yes localhost 'hostname; whoami' ; echo "退出码=$?"
+```
+
+```text
+sshd        ：active
+~/.ssh      ：不存在（第一次 ssh 尝试后自动创建 known_hosts）
+ssh 自连    ：退出码=255，Permission denied (publickey,...password)
+hostname    ：centos100
+hostname -I ：192.168.6.100 192.168.122.1 172.17.0.1
+免密测试    ：centos100 / atguigu / 退出码=0
+```
+
+### 多主机 inventory 与连通性
+
+```bash
+cd /home/atguigu/ansible-practice
+ssh -o StrictHostKeyChecking=no 127.0.0.1 'hostname; whoami' ; echo "预热退出码=$?"
+cat > inventory-multi.ini <<'EOF'
+[local]
+localhost ansible_connection=local
+
+[ssh_nodes]
+centos100 ansible_host=127.0.0.1 ansible_user=atguigu
+
+[practice:children]
+local
+ssh_nodes
+
+[practice:vars]
+practice_root=/home/atguigu/ansible-practice/multi-demo
+EOF
+ansible-inventory -i inventory-multi.ini --graph
+ansible -i inventory-multi.ini all -m ping
+```
+
+```text
+预热          ：Warning: Permanently added '127.0.0.1' ...；centos100 / atguigu / 预热退出码=0
+--graph       ：@all > @practice > (@local: localhost, @ssh_nodes: centos100)；@ungrouped 为空
+ping          ：localhost 与 centos100 均 SUCCESS / pong
+```
+
+### 多主机 playbook 与 when
+
+```bash
+cat > multi-host.yml <<'EOF'
+（完整内容见学习总结「九、多主机部署与 when 条件」小节）
+EOF
+ansible-playbook -i inventory-multi.ini multi-host.yml --syntax-check
+ansible-playbook -i inventory-multi.ini multi-host.yml --list-hosts
+ansible-playbook -i inventory-multi.ini multi-host.yml
+```
+
+```text
+--syntax-check：playbook: multi-host.yml
+--list-hosts  ：hosts (2): centos100 / localhost
+TASK [Gathering Facts]                ：ok: [localhost] / ok: [centos100]
+TASK [Show per-host identity]
+  localhost => inventory_hostname=localhost ansible_host=localhost ansible_hostname=centos100 distribution=CentOS 7.9 memtotal_mb=1980 python=2.7.5
+  centos100 => inventory_hostname=centos100 ansible_host=127.0.0.1 ansible_hostname=centos100 distribution=CentOS 7.9 memtotal_mb=1980 python=2.7.5
+TASK [Show group variable]            ：两台都读到 /home/atguigu/ansible-practice/multi-demo
+TASK [Create per-host directory]      ：changed: [localhost] / changed: [centos100]
+TASK [Write per-host info file]       ：changed: [localhost] / changed: [centos100]
+TASK [Task only for the SSH group]    ：skipping: [localhost] / ok: [centos100]
+TASK [Task only for the local group]  ：ok: [localhost] / skipping: [centos100]
+PLAY RECAP                            ：centos100 与 localhost 各 ok=6 changed=2 skipped=1
+```
+
+关键结论：`inventory_hostname` 不同但 `ansible_hostname` 相同 → 同一台机器两个身份；两台 facts 完全相同，能区分的只有 inventory 与变量。
+
+### --limit
+
+```bash
+ansible-playbook -i inventory-multi.ini multi-host.yml --limit centos100 --list-hosts
+ansible-playbook -i inventory-multi.ini multi-host.yml --limit centos100
+```
+
+```text
+--list-hosts：hosts (1): centos100
+执行        ：PLAY RECAP 只有 centos100，ok=6 changed=0 skipped=1
+```
+
+结论：`--limit` 只缩小执行范围，不改变每台主机的 `when` 判断（centos100 依旧被 local 组的任务跳过）；`changed=0` 说明上一轮已达成目标状态，多主机上两台各自幂等。
+
+### 未验证项
+
+- `multi-demo/localhost/info.txt` 与 `multi-demo/centos100/info.txt` 的实际内容尚未 `cat` 查看，仅凭复跑 `changed=0` 间接判断内容与目标一致。
+## 2026-09-18 一键部署 Nginx 完整 playbook 与 SELinux 标签定案
+
+### 补验第九节遗留项（multi-demo 产物）
+
+```bash
+find /home/atguigu/ansible-practice/multi-demo -type f | sort
+echo '=== localhost ===' ; cat /home/atguigu/ansible-practice/multi-demo/localhost/info.txt
+echo '=== centos100 ===' ; cat /home/atguigu/ansible-practice/multi-demo/centos100/info.txt
+```
+
+```text
+find      ：multi-demo/centos100/info.txt、multi-demo/localhost/info.txt
+localhost ：inventory_hostname=localhost / ansible_host=localhost / ansible_hostname=centos100 / ansible_distribution=CentOS 7.9 / ansible_default_ipv4=192.168.6.100 / ansible_python_version=2.7.5
+centos100 ：inventory_hostname=centos100 / ansible_host=127.0.0.1 / ansible_hostname=centos100 / 其余同上
+```
+
+结论：两台 `inventory_hostname` 与 `ansible_host` 不同、`ansible_hostname` 相同，正是「同一台机器两个身份」；内容与预期一致，第九节「尚未 cat」的未验证项关闭。
+
+### 新增文件
+
+```bash
+cat > inventory-prod.ini <<'EOF'
+[web]
+localhost ansible_connection=local site_port=8008
+centos100 ansible_host=127.0.0.1 ansible_user=atguigu site_port=8009
+EOF
+cat > templates/index.html.j2 <<'EOF'        # 16 行
+cat > templates/nginx-site.conf.j2 <<'EOF'    # 15 行
+cat > nginx-deploy.yml <<'EOF'                # 约 75 行
+```
+
+完整文件内容统一归档在 `学习总结/ops_ansible_basics.md` 第十节，此处不重复留第二份代码。
+
+### 语法检查与任务列表
+
+```bash
+ansible-playbook -i inventory-prod.ini nginx-deploy.yml --syntax-check
+ansible-playbook -i inventory-prod.ini nginx-deploy.yml --list-tasks
+```
+
+```text
+--syntax-check：playbook: nginx-deploy.yml
+--list-tasks ：7 个任务（不含 `meta: flush_handlers`，也不含 rescue 内的任务）
+```
+
+### 首次部署（serial: 1 → 输出两次 PLAY）
+
+```bash
+ansible-playbook -i inventory-prod.ini nginx-deploy.yml -K
+```
+
+```text
+localhost：node=localhost port=8008 root=/var/www/ops-demo-localhost
+           Create site root / Deploy index page / Deploy nginx site config / RUNNING HANDLER [reload nginx] 各 changed，Verify site is serving ok
+           RECAP ok=9 changed=4
+centos100：node=centos100 port=8009 root=/var/www/ops-demo-centos100
+           同样 4 处 changed，RECAP ok=9 changed=4
+```
+
+### 幂等复跑（两台全量）
+
+```bash
+ansible-playbook -i inventory-prod.ini nginx-deploy.yml -K
+```
+
+```text
+两台各 ok=8 changed=0，无 RUNNING HANDLER
+```
+
+结论：首跑 `ok=9` 与复跑 `ok=8` 差的那 1 个就是 handler，`ok` 是「成功执行次数」并包含 changed。
+
+### 目录标签排查（前三步只读）
+
+```bash
+ls -ldZ /var/www ; ls -lZ /var/www/ops-demo-localhost/
+sudo semanage fcontext -l | grep '^/var/www'
+sudo matchpathcon -V /var/www/ops-demo-localhost /var/www/ops-demo-localhost/index.html
+sudo grep -i 'denied' /var/log/audit/audit.log | tail -n 5
+```
+
+```text
+ls -ldZ /var/www ：unconfined_u:object_r:var_t:s0
+ls -lZ 目录内    ：index.html 是 system_u:object_r:httpd_sys_content_t:s0
+semanage fcontext：命中 /var/www(/.*)?  all files  system_u:object_r:httpd_sys_content_t:s0
+matchpathcon -V ：/var/www/ops-demo-localhost has context ...var_t:s0, should be ...httpd_sys_content_t:s0；index.html verified
+audit.log       ：最新 denial 是 2026-09-17 约 20:00 的 nginx 绑 18099 `name_bind`；本次部署零 AVC
+```
+
+### 修复既有标签偏差
+
+```bash
+sudo restorecon -Rnv /var/www/ops-demo-localhost /var/www/ops-demo-centos100
+sudo restorecon -Rv  /var/www/ops-demo-localhost /var/www/ops-demo-centos100
+ls -ldZ /var/www/ops-demo-localhost /var/www/ops-demo-centos100 ; ls -lZ /var/www/ops-demo-localhost/
+sudo matchpathcon -V /var/www/ops-demo-localhost /var/www/ops-demo-centos100 ; sudo matchpathcon -V /var/www
+curl -sSI http://127.0.0.1:8008/ | head -n 1 ; curl -sSI http://127.0.0.1:8009/ | head -n 1
+```
+
+```text
+dry-run 与真跑输出相同：restorecon reset <路径> context unconfined_u:object_r:var_t:s0->unconfined_u:object_r:httpd_sys_content_t:s0（两个目录各一行）
+标签复查 ：两个目录均为 unconfined_u:object_r:httpd_sys_content_t:s0；index.html 仍是 system_u:object_r:httpd_sys_content_t:s0
+matchpathcon：两个目录 verified；/var/www 仍 has context var_t:s0, should be httpd_sys_content_t:s0（机器基线偏差，未动）
+curl     ：8008 与 8009 均 HTTP/1.1 200 OK
+```
+
+附带结论：`-n` 的输出措辞与真跑一模一样（都打 `restorecon reset`），判断是否真的改掉只能看 `ls -Z` / `matchpathcon -V`。
+
+### 对照实验：谁会给新目录/新文件套标签
+
+```bash
+sudo mkdir -p /var/www/labeltest-bash ; ls -ldZ /var/www/labeltest-bash
+ansible local -i inventory-prod.ini -b -m file -a 'path=/var/www/labeltest state=directory mode=0755' -K
+ansible local -i inventory.ini -b -m file -a 'path=/var/www/labeltest state=directory mode=0755' -K
+ansible local -i inventory.ini -b -m copy -a 'content="hello" dest=/var/www/labeltest/index.html mode=0644' -K
+ls -ldZ /var/www/labeltest ; ls -lZ /var/www/labeltest/
+ansible local -i inventory.ini -b -m file -a 'path=/var/www/touchtest state=touch' -K
+ls -lZ /var/www/touchtest
+sudo rm -rf /var/www/labeltest-bash /var/www/labeltest /var/www/touchtest
+```
+
+```text
+sudo mkdir              ：unconfined_u:object_r:var_t:s0
+file(state=directory)   ："secontext": "unconfined_u:object_r:var_t:s0"
+file(state=touch)       ："secontext": "unconfined_u:object_r:var_t:s0"
+copy(content="hello")   ："secontext": "system_u:object_r:httpd_sys_content_t:s0"
+```
+
+结论：`copy`/`template` 落地文件会套策略默认标签；`file` 模块建目录和建文件都不会。分界线是「模块」，不是「目录/文件」。
+
+教训：第二条命令的 pattern `local` 不在 `inventory-prod.ini` 里（那里只有 `[web]`），Ansible 只给 `[WARNING]: Could not match supplied host pattern` + `No hosts matched, nothing to do`，**一条任务都没执行**。ad-hoc 的 pattern 必须在 `-i` 指定的那份 inventory 里存在。
+
+### 加固：`Create site root` 增加 `setype` 后复跑
+
+```bash
+cat > nginx-deploy.yml <<'EOF'
+# 与首版唯一差别：Create site root 的 file 任务增加 setype: httpd_sys_content_t
+EOF
+ansible-playbook -i inventory-prod.ini nginx-deploy.yml --syntax-check
+sudo chcon -t var_t /var/www/ops-demo-localhost ; ls -ldZ /var/www/ops-demo-localhost
+ansible-playbook -i inventory-prod.ini nginx-deploy.yml --limit localhost -K
+ls -ldZ /var/www/ops-demo-localhost
+sudo rm -rf /var/www/ops-demo-centos100 /etc/nginx/conf.d/ops-demo-centos100.conf
+ansible-playbook -i inventory-prod.ini nginx-deploy.yml --limit centos100 -K
+ls -ldZ /var/www/ops-demo-centos100 ; curl -sSI http://127.0.0.1:8009/ | head -n 1
+```
+
+```text
+--syntax-check：playbook: nginx-deploy.yml
+chcon 之后   ：unconfined_u:object_r:var_t:s0
+--limit localhost 复跑：Create site root changed（其余 ok，无 handler），RECAP ok=8 changed=1
+复跑后标签   ：unconfined_u:object_r:httpd_sys_content_t:s0（自愈成功，这一处 changed 完全来自标签）
+删目录+conf 后 --limit centos100：Create site root / Deploy index page / Deploy nginx site config / RUNNING HANDLER [reload nginx] 各 changed，Verify ok，RECAP ok=9 changed=4
+新目录标签   ：unconfined_u:object_r:httpd_sys_content_t:s0（从零创建即正确）；8009 HTTP/1.1 200 OK
+```
+
+推理技巧：`sudo rm -rf` 时第一次密码输错，靠 `Create site root`、`Deploy index page` 报 `changed` 反推删除确实生效，无需再单独 `ls` 确认。
+
+### 收尾清理
+
+```bash
+rm -rf /home/atguigu/ansible-practice/multi-demo ; ls -l /home/atguigu/ansible-practice
+```
+
+```text
+保留文件：handlers-demo.yml、handlers-nginx.yml、inventory.ini、inventory-multi.ini、inventory-prod.ini、multi-host.yml、nginx-deploy.yml、site.yml、templates/、vars-template.yml
+```
