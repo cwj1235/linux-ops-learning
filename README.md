@@ -78,6 +78,8 @@ new-chat/
 
 ## 当前进度
 
+2026-09-19：Ansible Roles 重构完成。用 `ansible-galaxy init` 生成 `roles/nginx_site`（`defaults`/`handlers`/`tasks`/`vars`/`meta`/`templates`），把原 `nginx-deploy.yml` 的任务、handler、模板按职责搬进 role，新 playbook `deploy.yml` 只剩 `hosts`/`become`/`serial` 加 `roles: [nginx_site]`；两个模板 `cp` 原样搬入无需修改，模板引用改为相对名。验收标准是纯重构：`--syntax-check` 通过、全量复跑两台各 `ok=8 changed=0`、无 RUNNING HANDLER，行为与旧 playbook 完全一致。并实测变量优先级：role `defaults` 最低（被 inventory 覆盖）、inventory 主机变量居中、role `vars` 高于 inventory（`changed=3`、端口变 9000）、`-e` 高于 inventory。过程中纠正一次预测失误（`changed=2` 实为 3，因为 `site_port` 同时被首页模板引用），并确立「改变量前先 `grep -rn` 列引用点」的做法。
+
 2026-09-18：Ansible 一键部署 Nginx 完整 playbook 已完成。新增 `inventory-prod.ini`（`[web]` 两台主机各自的 `site_port`）、`templates/index.html.j2`、`templates/nginx-site.conf.j2` 与 `nginx-deploy.yml`（`serial: 1` 滚动发布、`yum` 幂等装包、`file` 建站点目录、`template` 部署首页与站点配置、`block` + `uri` 自检、`rescue` 回滚 + `fail` 报红）。实测首跑两台各 `ok=9 changed=4`、幂等复跑 `ok=8 changed=0`、`chcon -t var_t` 破坏后复跑 `changed=1` 自愈、删除目录后重建 `ok=9 changed=4` 且新目录标签立即正确。关键发现：`copy`/`template` 落地文件会自动套策略默认 SELinux 标签，`file` 模块建目录和建文件都不会，必须显式 `setype: httpd_sys_content_t`；修复既有偏差用 `restorecon`（策略里已有 `/var/www(/.*)?` 规则，无需 `semanage fcontext`），`chcon` 只用于临时验证。至此 Ansible 阶段十个小节全部完成。
 
 2026-09-18：Ansible 免密 SSH 与多主机部署已完成。配置了 `ssh-keygen` + `authorized_keys` 免密登录（`BatchMode=yes` 验证退出码 0），并预热 `127.0.0.1` 主机指纹；新建 `inventory-multi.ini`（`[local]` + `[ssh_nodes]` + `[practice:children]` 组嵌套 + 组变量）与 `multi-host.yml`（`hosts: practice`、`gather_facts: true`、按 `inventory_hostname` 分别建目录写文件、两个 `when: inventory_hostname in groups[...]` 分支任务）。实测两台各 `ok=6 changed=2 skipped=1`，`--limit centos100` 时 `changed=0` 验证幂等。关键概念：`inventory_hostname`（inventory 名字）、`ansible_host`（真实连接地址）、`ansible_hostname`（远端 facts）三者含义不同；本例前者不同、后者相同，正是「同一台机器两个身份」。下一步：做「一键部署 Nginx 及基础配置」的完整 playbook。
@@ -90,7 +92,7 @@ new-chat/
 
 2026-09-17：Ansible handlers 已完成。`handlers-demo.yml` 实测「有变更才触发、无变更不触发、多次触发追加写入」三种情况；排查并定位了 `command` 模块不做重定向导致 handler 报 `changed` 却不生成文件的问题，改用 `shell` 后修复，顺带确认「`changed` 不等于副作用发生」。下一步：用 `systemd` 模块在配置变化时 reload Nginx。
 
-2026-09-16：Ansible 阶段已完成五节——安装与本机连通性、Inventory、Ad-hoc 命令、Playbook 基础、变量与模板。变量来源与优先级（inventory/facts -> playbook `vars` -> 命令行 `-e`）已实测，未定义变量会直接 `FAILED!`；`templates/app.conf.j2` 与 `vars-template.yml` 已完成渲染、幂等（`changed=2` -> `changed=0`）和 `-e` 覆盖（`changed=1` -> `changed=0`）验证。下一步：Ansible handlers。下方 2026-09-14 段落里的“下一步”是 Redis 阶段的历史停点。
+2026-09-16：Ansible 阶段已完成五节——安装与本机连通性、Inventory、Ad-hoc 命令、Playbook 基础、变量与模板。变量来源与优先级（inventory/facts -> playbook `vars` -> 命令行 `-e`）已实测，未定义变量会直接 `FAILED!`；`templates/app.conf.j2` 与 `vars-template.yml` 已完成渲染、幂等（`changed=2` -> `changed=0`）和 `-e` 覆盖（`changed=1` -> `changed=0`）验证。下一步：Ansible handlers。
 
 2026-09-14：AOF 加载、指定 RDB 隔离回灌、临时实验清理、正式实例 128 MiB 上限及 noeviction 超限行为均已验证。正式 Redis 重启后 maxmemory=134217728、策略为 noeviction，两个练习键可读回；隔离实例 `127.0.0.1:6381` 以 1 MiB 上限实测，前 6 个 65536 字节键写入成功，第 7 个开始返回 OOM 拒写，已有键仍可读，DEL 释放空间后写入恢复。6381 已通过 `SHUTDOWN NOSAVE` 关闭，正式 6379 仍返回 PONG。
 
@@ -125,10 +127,10 @@ Redis 内存上限：128 MiB 已写入配置文件，2026-09-14 17:10 服务重�
 当前练习键：practice:rdb-check 在正常重启后仍读到 rdb-ok，与备份一并保留，尚未清理
 Redis AOF：`appendonly yes` 已写入 `/etc/redis.conf`；`/var/lib/redis/appendonly.aof` 已生成，重启日志确认从 AOF 加载，`practice:aof-check` 读回 `aof-ok`
 Docker 安装、镜像加速、容器生命周期、数据卷、端口映射、Dockerfile 与 Compose 编排：已完成
-Ansible 安装与 Inventory、Ad-hoc 命令、Playbook 基础、变量与模板、handlers、handler 对接 Nginx reload（含 SELinux 端口排查）、block/rescue 错误处理、多主机与 when 条件、一键部署 Nginx（含 SELinux 标签加固）：已完成
+Ansible 安装与 Inventory、Ad-hoc 命令、Playbook 基础、变量与模板、handlers、handler 对接 Nginx reload（含 SELinux 端口排查）、block/rescue 错误处理、多主机与 when 条件、一键部署 Nginx（含 SELinux 标签加固）、Roles 重构（变量优先级实测）：已完成
 ```
 
-下一步：只读检查 `/var/lib/redis-noeviction-20260914` 的目录内容，并再次确认 6381 无残留监听；用户确认目录只包含本次实验文件后，再指导安全清理该临时目录。正式 6379 的 128 MiB 上限、练习键和 noeviction 策略均已验收，不再重复设置或重启；配置备份 `/etc/redis.conf.before-maxmemory-20260914-165752` 保留。性能调优、断电恢复和高可用尚未验证，原始数据备份与 AOF 保留。
+说明：上面 `text` 块里 2026-09-14 前后的 Redis 条目是当时阶段的历史快照。其中原本写的「下一步」（只读检查并清理 `/var/lib/redis-noeviction-20260914`、确认 6381 无残留监听）**已经完成**：隔离实例 `SHUTDOWN NOSAVE` 后 6381 连接被拒，临时目录内容确认后已删除（`ls -ld` 返回「没有那个文件或目录」）。Redis 阶段的收尾结论以 `学习总结/ops_redis_basics.md` 和 `项目记录/memory.md` 为准：正式实例 128 MiB 上限与 noeviction 策略已验收，配置备份与原始数据/AOF 保留；性能调优、断电恢复和高可用仍未验证。
 
 ## Git 保存流程
 

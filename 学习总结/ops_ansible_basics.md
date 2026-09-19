@@ -1554,8 +1554,256 @@ server {
 - 判断结果只看 `PLAY RECAP` 的 `ok/changed/failed/rescued/skipped`，再叠加业务面验证（`ss`、`curl`、`ls -Z`）。
 - 本节不要重做。
 
-## 十一、后续学习与验收
+## 十一、Roles 重构：把 playbook 变成可复用组件（已完成）
 
-Ansible 阶段十个小节全部完成：安装与本机连通性、Inventory、Ad-hoc 命令、Playbook 基础、变量与模板、handlers、handler 对接 Nginx reload（含 SELinux 端口排查）、`block`/`rescue` 错误处理、多主机与 `when` 条件、一键部署 Nginx 完整 playbook（含 SELinux 标签加固）。以上内容不要重做。
+### 目标与验收标准
 
-尚未开始的下一步方向（待用户选择，不属于已验收范围）：Roles 与 `ansible-galaxy`、Ansible Vault、动态 inventory、`ansible-lint`/CI 集成、在第二台真实机器或容器上验证滚动发布。
+把已经跑通幂等与回滚的 `nginx-deploy.yml` 重构成 role，验收标准是**纯重构**：`--syntax-check` 通过、复跑行为完全一致（`changed=0`），不是"顺手改好点别的"。
+
+### 生成骨架
+
+```bash
+cd /home/atguigu/ansible-practice
+ansible-galaxy init roles/nginx_site
+find roles/nginx_site -type f | sort
+```
+
+```text
+- Role roles/nginx_site was created successfully
+
+roles/nginx_site/defaults/main.yml
+roles/nginx_site/handlers/main.yml
+roles/nginx_site/meta/main.yml
+roles/nginx_site/README.md
+roles/nginx_site/tasks/main.yml
+roles/nginx_site/tests/inventory
+roles/nginx_site/tests/test.yml
+roles/nginx_site/.travis.yml
+roles/nginx_site/vars/main.yml
+```
+
+关键发现：**脚手架不生成 `templates/` 和 `files/`**——它们属于"可选目录"，Ansible 的约定是"目录存在就用，不存在就跳过"，不报错。模板目录要自己建。
+
+另外两点：脚手架把传入路径原样写进注释（`# tasks file for roles/nginx_site`），但 **Ansible 认的 role 名是目录名 `nginx_site`**，不是 `roles/nginx_site`；`.travis.yml` 与 `tests/` 是 2019 年那版脚手架的占位文件，本例用不上，`.travis.yml` 已删除。
+
+### 目录职责与搬迁对应关系
+
+| role 里的位置 | 放什么 | 来自原 playbook 的哪部分 |
+|---|---|---|
+| `tasks/main.yml` | 任务主体（`block`/`rescue` 原样） | `tasks:` |
+| `handlers/main.yml` | `reload nginx` | `handlers:` |
+| `templates/` | 两个模板（`cp` 过去，一个字没改） | 外层 `templates/` |
+| `defaults/main.yml` | 参数 + 派生量 | `vars:` 里的 `site_name` 等 |
+| `vars/main.yml` | 不希望被覆盖的常量（本例留空） | —— |
+| `meta/main.yml` | `dependencies: []` | —— |
+
+### 四个文件的内容
+
+```bash
+mkdir -p roles/nginx_site/templates && cp templates/index.html.j2 templates/nginx-site.conf.j2 roles/nginx_site/templates/
+```
+
+`roles/nginx_site/defaults/main.yml`：
+
+```yaml
+---
+# role 参数：优先级最低，inventory / play vars / -e 都能覆盖它
+site_name: ops-demo
+site_port: 9000
+
+# 派生量：由上面的参数算出来，调用方不需要关心
+site_root: "/var/www/{{ site_name }}-{{ inventory_hostname }}"
+conf_file: "/etc/nginx/conf.d/{{ site_name }}-{{ inventory_hostname }}.conf"
+```
+
+`roles/nginx_site/handlers/main.yml`：
+
+```yaml
+---
+- name: reload nginx
+  systemd:
+    name: nginx
+    state: reloaded
+```
+
+`roles/nginx_site/tasks/main.yml`：
+
+```yaml
+---
+- name: Show target node info
+  debug:
+    msg: "node={{ inventory_hostname }} port={{ site_port }} root={{ site_root }}"
+
+- name: Install nginx
+  yum:
+    name: nginx
+    state: present
+  when: ansible_os_family == "RedHat"
+
+- name: Create site root
+  file:
+    path: "{{ site_root }}"
+    state: directory
+    mode: '0755'
+    setype: httpd_sys_content_t
+
+- name: Deploy index page
+  template:
+    src: index.html.j2
+    dest: "{{ site_root }}/index.html"
+    mode: '0644'
+
+- name: Apply nginx site config with rollback
+  block:
+    - name: Deploy nginx site config
+      template:
+        src: nginx-site.conf.j2
+        dest: "{{ conf_file }}"
+        mode: '0644'
+      notify: reload nginx
+
+    - name: Flush handlers to apply config now
+      meta: flush_handlers
+
+    - name: Verify site is serving
+      uri:
+        url: "http://127.0.0.1:{{ site_port }}/"
+        return_content: true
+      register: site_resp
+      failed_when: site_name not in site_resp.content
+
+    - name: Show verification result
+      debug:
+        msg: "{{ inventory_hostname }} HTTP {{ site_resp.status }}，页面已包含站点名 {{ site_name }}"
+
+  rescue:
+    - name: Remove the broken site config
+      file:
+        path: "{{ conf_file }}"
+        state: absent
+
+    - name: Reload nginx after rollback
+      systemd:
+        name: nginx
+        state: reloaded
+
+    - name: Report rollback and fail
+      fail:
+        msg: "{{ inventory_hostname }} 站点验证失败，已回滚 {{ conf_file }}"
+```
+
+`deploy.yml`（playbook 只剩骨架）：
+
+```yaml
+---
+- name: Deploy nginx site by role
+  hosts: web
+  gather_facts: true
+  become: true
+  serial: 1
+
+  roles:
+    - nginx_site
+```
+
+### 重构带来的四处变化
+
+- **任务名前缀**：执行时显示 `TASK [nginx_site : Show target node info]`，这个 `nginx_site :` 是 Ansible 自动打的归属标签；一台机器挂多个 role 时，看日志就知道任务属于谁。`notify: reload nginx` 仍然只按名字匹配，前缀只是显示层的东西。
+- **模板引用改相对名**：`src: index.html.j2`，不再写 `templates/index.html.j2`。
+- **派生量进 defaults**：`site_root`/`conf_file` 由 `site_name` + `inventory_hostname` 拼出，`deploy.yml` 里一个变量都不剩。
+- **连接参数留在 playbook**：`hosts`/`gather_facts`/`become`/`serial` 属于"怎么连、怎么跑"，是 play 的职责，不塞进 role。
+
+另外，`defaults` 里的 `site_port: 9000` 是**故意选的兜底值**：9000 在 `http_port_t` 白名单内，万一真生效也能绑上，不会把优先级实验做成故障。
+
+### 重构验收：行为不变
+
+```bash
+ansible-playbook -i inventory-prod.ini deploy.yml --syntax-check
+ansible-playbook -i inventory-prod.ini deploy.yml -K
+```
+
+```text
+--syntax-check：playbook: deploy.yml
+执行结果：两次 PLAY（serial: 1），两台各 ok=8 changed=0，无 RUNNING HANDLER
+```
+
+结论：role 版与旧 `nginx-deploy.yml` **行为完全一致**，重构没有改变任何东西。（`nginx-deploy.yml` 保留作"重构前对照"，role 版是当前主用。）
+
+### 变量优先级实测（本节核心）
+
+| 来源 | 实测过程 | 结论 |
+|---|---|---|
+| role `defaults/main.yml` | 写了 `site_port: 9000`，实际两台仍打印 `port=8008` / `port=8009` | **最低**，被 inventory 主机变量覆盖 |
+| inventory 主机变量 | `site_port=8008` / `8009` | 高于 role defaults |
+| role `vars/main.yml` | 写 `site_port: 9000` → debug 打印 `port=9000`，配置同步变成 9000 | **高于 inventory 主机变量** |
+| `-e`（命令行） | `-e site_port=9000` → debug 打印 `port=9000` | 高于 inventory（与 role `vars` 的相对关系**未单独实测**） |
+
+三次实验的完整过程：
+
+```bash
+# 实验 A：defaults 里放 9000（结果被 inventory 覆盖，debug 显示 8008/8009，changed=0）
+# 实验 B：vars 里放 9000
+cat > roles/nginx_site/vars/main.yml <<'EOF'
+---
+site_port: 9000
+EOF
+ss -lntp | grep 9000
+ansible-playbook -i inventory-prod.ini deploy.yml --limit centos100 -K
+ss -lntp | grep 9000 ; curl -sSI http://127.0.0.1:9000/ | head -n 1
+
+# 实验 C：撤回（vars 恢复成只有注释）
+ansible-playbook -i inventory-prod.ini deploy.yml --limit centos100 -K
+
+# 实验 D：-e 临时覆盖
+ansible-playbook -i inventory-prod.ini deploy.yml --limit centos100 -e site_port=9000 -K
+ansible-playbook -i inventory-prod.ini deploy.yml --limit centos100 -K
+```
+
+```text
+实验 B：debug msg = node=centos100 port=9000；Deploy index page / Deploy nginx site config / RUNNING HANDLER 各 changed；
+        RECAP ok=9 changed=3；ss 显示 127.0.0.1:9000；curl 返回 HTTP/1.1 200 OK
+实验 C：debug msg = port=8009；同样是 3 处 changed；9000 消失，8009 回来
+实验 D：-e site_port=9000 → debug port=9000、changed=3；撤回复跑 changed=3 回到 8009
+```
+
+实用套路：**用 `-e` 做临时覆盖实验，再用一次普通复跑把状态拉回"代码里声明的样子"**，不需要手工改文件。
+
+### 一次预测失误与它带来的方法
+
+实验 B 我预测 `changed=2`（配置文件 + handler），实际是 **`changed=3`**，多出来的是 `Deploy index page`。
+
+原因：`site_port` 不只出现在 nginx 的 `server` 配置里，也出现在首页模板 `<li>listen port: {{ site_port }}</li>` 里，端口一变首页内容也变（checksum 不同）→ 重写。**我只顺着一个引用点推，漏了另一个。**
+
+方法：改一个变量的值之前，先用 `grep -rn` 列出它所有引用点，再预测 `changed` 数量。
+
+```bash
+grep -rn 'site_port' roles/ deploy.yml templates/ inventory-prod.ini
+```
+
+实测命中 11 处：inventory 两份主机变量、role `defaults`（1）、role `tasks`（debug 与 `uri` 的 URL，2）、role `vars` 当时那行、role 两个模板（2）、外层旧 `templates/` 两个模板（2）。
+
+### 一个工具性教训：粘贴通道会失真
+
+中途有两次 heredoc 粘贴进终端时字符被吞/被打乱（出现过 `oles/nginx_site/tasks/main.yml`、`-i ind.ini`、`-i rod.ini` 这类残句）。事后核对：**文件内容和执行结果都是对的**，所以更可能是"进入对话的粘贴文本被压缩/丢字符"，而不是终端真的收到了残缺命令。助手当时先判断成"终端吞了一段"，属于证据不足的草率结论，后来已更正。
+
+由此得到的方法：**判断"文件内容对不对"要靠 `cat` 回读 + 实际执行结果，不能靠粘贴过来的字面**。而且回读只是间接证据——`handlers/main.yml` 到底能不能跑，是实验 B 真正触发 `RUNNING HANDLER [nginx_site : reload nginx]` 之后才算验证过的。**"写文件成功"不等于"文件内容对"，"回读正确"也不等于"功能可用"，要触发一次才算。**
+
+### 遗留与当前状态
+
+- `roles/nginx_site/vars/main.yml` 保持"只有注释"的状态（注释里写明了它的优先级陷阱）。
+- 旧 `nginx-deploy.yml` 保留作重构前对照；role 版（`deploy.yml` + `roles/nginx_site/`）是当前主用。
+- 环境状态：`127.0.0.1:8008`（localhost 身份）与 `127.0.0.1:8009`（centos100 身份）各 200，9000 已撤回，两台全量复跑 `ok=8 changed=0`。
+
+### 小节结论
+
+- role 不是新功能、不是命令、也不是执行引擎，它就是**一套约定目录**；它改变代码怎么放，不改变 Ansible 怎么干。判断标准是"要不要复用"：要做第二遍、要给多台机器按角色组合、要能用社区 role，就值得；一次性三行 playbook 不值得。
+- 最值钱的两个位置是 `defaults`（可被覆盖的参数）和 `vars`（不希望被覆盖的常量）——它们把"调用方能改什么"和"内部实现"分开了，这是单文件 playbook 里表达不出来的。
+- role 里模板用**相对名**；派生量放 `defaults` 可以让 playbook 彻底无变量。
+- `defaults` 优先级最低、role `vars` 高于 inventory 主机变量、`-e` 最高（与 role `vars` 的相对关系未实测）。**参数放错位置，两台机器会挤同一个端口。**
+- 重构的验收标准是行为不变（`changed=0`），不是"跑通"。
+- 本节不要重做。
+## 附：后续学习与验收
+
+Ansible 阶段已完成十一个小节（一～十一）：安装与本机连通性、Inventory、Ad-hoc 命令、Playbook 基础、变量与模板、handlers、handler 对接 Nginx reload（含 SELinux 端口排查）、`block`/`rescue` 错误处理、多主机与 `when` 条件、一键部署 Nginx 完整 playbook（含 SELinux 标签加固）、Roles 重构（含变量优先级实测）。以上内容不要重做。后续若新增小节（例如 Roles 重构），编号从这里顺延（十一、十二…），本节固定排在文件最后，只作为方向说明。
+
+尚未开始的下一步方向（待用户选择，不属于已验收范围）：Ansible Vault、动态 inventory、`ansible-lint`/CI 集成、在第二台真实机器或容器上验证滚动发布。

@@ -882,3 +882,19 @@ GitHub Actions 或同类流水线，实现测试、构建、镜像或发布、�
 - 机器基线偏差：`/var/www` 自身是 `var_t`（`matchpathcon` 判 should be `httpd_sys_content_t`），非本次引入、不影响站点访问，故意未动。
 - 清理：只删 `multi-demo/`；`.yml`/`.ini`/`templates/*.j2` 全部保留，`/var/www/ops-demo-*` 与 `/etc/nginx/conf.d/ops-demo-*.conf` 保留作演示。第九节「`multi-demo/*/info.txt` 尚未 cat」的遗留项已补验并关闭，`multi-host.yml` 的全量复跑不再需要。
 - 本节不要重做。Ansible 阶段十个小节全部完成，下一步方向待定。
+## 2026-09-19 Roles 重构完成（第十一节）
+
+- 用 `ansible-galaxy init roles/nginx_site` 生成骨架；关键发现：**脚手架不生成 `templates/` 和 `files/`**（可选目录，存在才用，不存在不报错）。`.travis.yml`、`tests/` 是旧版脚手架占位，`.travis.yml` 已删。role 名认的是目录名 `nginx_site`，不是 `roles/nginx_site`。
+- 结构：`defaults/main.yml`（`site_name: ops-demo`、兜底 `site_port: 9000`、派生量 `site_root`/`conf_file`）、`handlers/main.yml`（reload nginx）、`tasks/main.yml`（原任务含 block/rescue，模板改相对名 `index.html.j2` / `nginx-site.conf.j2`）、`vars/main.yml`（留空，只有注释）、`meta/main.yml`（`dependencies: []`）。新 playbook `deploy.yml` 只剩 `hosts: web` / `gather_facts` / `become` / `serial: 1` + `roles: [nginx_site]`。
+- 两个模板用 `cp` 原样搬进 role（一处没改），因为模板引用的变量在 role 里都能取到；`hosts`/`become`/`serial` 留在 playbook（属于 play 的职责）。执行时任务显示为 `TASK [nginx_site : ...]`，前缀是 Ansible 自动打的 role 归属标签，`notify` 仍只按名字匹配。
+- 验收（纯重构）：`--syntax-check` 通过；全量复跑两台各 `ok=8 changed=0`、无 `RUNNING HANDLER` → 与旧 `nginx-deploy.yml` 行为完全一致。旧文件保留作"重构前对照"，role 版为当前主用。
+- 优先级实测：role `defaults` **最低**（写 `site_port: 9000`，实际仍用 8008/8009）；inventory 主机变量高于 defaults；role `vars` **高于 inventory**（写 9000 → debug `port=9000`、`changed=3`、9000 监听且 200）；`-e` 高于 inventory（`-e site_port=9000` → 9000）。**`-e` 与 role `vars` 的相对关系未单独实测**。
+- 预测失误更正：实验 B 预测 `changed=2`，实际 `changed=3`——`site_port` 同时被 `index.html.j2` 引用（`<li>listen port: {{ site_port }}</li>`），首页内容也变了。方法：改变量前先 `grep -rn` 列出全部引用点再预测 `changed`。
+- 工具性教训：中途两次 heredoc 粘贴字符被吞（`oles/...`、`-i ind.ini`），但**文件内容和执行结果都是对的** → 更可能是进入对话的粘贴文本被压缩/丢字符，不是终端问题；助手当时判成"终端吞了一段"属证据不足，已更正。方法：判断文件内容靠 `cat` 回读 + 执行结果；且回读只是间接证据，`handlers/main.yml` 是实验 B 真正触发 `RUNNING HANDLER` 后才算验证过的。
+- 环境状态：`127.0.0.1:8008`（localhost 身份）与 `127.0.0.1:8009`（centos100 身份）各 200；9000 已撤回不再监听；两台幂等。
+- 本节不要重做。下一步：第十二节 Ansible Vault。
+## 2026-09-19 文档清理（README 过时停点）
+
+- `README.md`「当前进度」末尾那句过时的 Redis「下一步」（只读检查并清理 `/var/lib/redis-noeviction-20260914`、确认 6381 无残留）已替换为「历史快照说明」：注明该实验早已收尾（`SHUTDOWN NOSAVE` 后 6381 拒连、临时目录已删除），并指向 `学习总结/ops_redis_basics.md` 与 memory 作为 Redis 阶段的收尾结论。
+- 同时删除 2026-09-16 条目里「下方 2026-09-14 段落里的『下一步』是 Redis 阶段的历史停点」这句已失效的提示。
+- 现在 `README.md`「当前进度」顶部就是最新进度，不再有指向 Redis 的假「下一步」。

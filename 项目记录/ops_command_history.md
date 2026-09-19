@@ -4919,3 +4919,121 @@ rm -rf /home/atguigu/ansible-practice/multi-demo ; ls -l /home/atguigu/ansible-p
 ```text
 保留文件：handlers-demo.yml、handlers-nginx.yml、inventory.ini、inventory-multi.ini、inventory-prod.ini、multi-host.yml、nginx-deploy.yml、site.yml、templates/、vars-template.yml
 ```
+## 2026-09-19 Roles 重构（第十一节）
+
+### 生成骨架
+
+```bash
+cd /home/atguigu/ansible-practice
+ansible-galaxy init roles/nginx_site
+find roles/nginx_site -type f | sort
+cat roles/nginx_site/tasks/main.yml ; cat roles/nginx_site/defaults/main.yml ; cat roles/nginx_site/vars/main.yml ; cat roles/nginx_site/meta/main.yml
+```
+
+```text
+- Role roles/nginx_site was created successfully
+
+defaults/main.yml、handlers/main.yml、meta/main.yml、README.md、tasks/main.yml、tests/inventory、tests/test.yml、.travis.yml、vars/main.yml
+（注意：没有 templates/ 和 files/——脚手架不创建可选目录）
+
+tasks/defaults/vars 的 main.yml 只有一行注释；meta/main.yml 是 galaxy_info 模板 + dependencies: []
+```
+
+### 搭结构并把内容搬进 role
+
+```bash
+mkdir -p roles/nginx_site/templates && cp templates/index.html.j2 templates/nginx-site.conf.j2 roles/nginx_site/templates/
+rm -f roles/nginx_site/.travis.yml
+cat > roles/nginx_site/defaults/main.yml <<'EOF'      # site_name / site_port: 9000 兜底 / 派生量 site_root、conf_file
+cat > roles/nginx_site/handlers/main.yml <<'EOF'      # reload nginx
+cat > roles/nginx_site/tasks/main.yml <<'EOF'         # 原任务，模板改相对名 index.html.j2 / nginx-site.conf.j2
+cat > deploy.yml <<'EOF'                              # hosts/become/serial + roles: [nginx_site]
+ansible-playbook -i inventory-prod.ini deploy.yml --syntax-check
+```
+
+```text
+--syntax-check：playbook: deploy.yml
+完整文件内容见 学习总结/ops_ansible_basics.md 第十一节
+```
+
+### 回读校验（粘贴通道失真后）
+
+```bash
+cat roles/nginx_site/handlers/main.yml ; cat roles/nginx_site/defaults/main.yml
+find roles/nginx_site -type f | sort
+ls -l /home/atguigu/ansible-practice ; ls -l /main.yml 2>&1
+```
+
+```text
+handlers/main.yml 内容正确（- name: reload nginx + systemd: name/state）
+defaults/main.yml 内容正确
+ansible-practice/ 下无异常文件；/main.yml 报“没有那个文件或目录”（碎片没落盘）
+```
+
+### 重构验收：全量复跑
+
+```bash
+ansible-playbook -i inventory-prod.ini deploy.yml -K
+```
+
+```text
+两次 PLAY（serial: 1）；任务名前缀为 [nginx_site : ...]
+localhost 与 centos100 各 ok=8 changed=0，无 RUNNING HANDLER
+```
+
+### 变量优先级实验
+
+```bash
+# 实验 A（defaults 里已有 site_port: 9000）→ debug 仍打印 8008 / 8009，说明 defaults 被 inventory 覆盖
+cat > roles/nginx_site/vars/main.yml <<'EOF'
+---
+site_port: 9000
+EOF
+ss -lntp | grep 9000
+ansible-playbook -i inventory-prod.ini deploy.yml --limit centos100 -K
+ss -lntp | grep 9000 ; curl -sSI http://127.0.0.1:9000/ | head -n 1
+```
+
+```text
+实验 B：debug msg = node=centos100 port=9000（vars 压过 inventory 的 8009）
+        Deploy index page / Deploy nginx site config / RUNNING HANDLER [nginx_site : reload nginx] 各 changed
+        RECAP ok=9 changed=3；ss 显示 LISTEN 127.0.0.1:9000；curl 返回 HTTP/1.1 200 OK
+```
+
+```bash
+cat > roles/nginx_site/vars/main.yml <<'EOF'          # 撤回成只有注释
+ansible-playbook -i inventory-prod.ini deploy.yml --limit centos100 -K
+ss -lntp | grep -E '8008|8009|9000' ; curl -sSI http://127.0.0.1:8009/ | head -n 1
+ansible-playbook -i inventory-prod.ini deploy.yml --limit centos100 -e site_port=9000 -K
+ss -lntp | grep -E '8009|9000'
+ansible-playbook -i inventory-prod.ini deploy.yml --limit centos100 -K
+ss -lntp | grep -E '8009|9000'
+```
+
+```text
+实验 C（撤回）：debug port=8009、changed=3（首页 + 配置 + handler）；9000 消失、8009 回来、200
+实验 D（-e）：debug port=9000、changed=3；9000 监听
+实验 D 撤回：debug port=8009、changed=3；9000 消失、只剩 8009
+```
+
+### 引用点清点
+
+```bash
+grep -rn 'site_port' roles/ deploy.yml templates/ inventory-prod.ini
+```
+
+```text
+命中 11 处：inventory 两份主机变量、role defaults(1)、role tasks(2：debug 与 uri URL)、role vars(当时 1)、
+role templates(2)、外层旧 templates/(2)。这份清单解释了实验 B 为什么 changed=3 而不是 2。
+```
+
+### 最终状态确认
+
+```bash
+ansible-playbook -i inventory-prod.ini deploy.yml -K
+ss -lntp | grep -E '8008|8009|9000'
+```
+
+```text
+两台各 ok=8 changed=0；监听只有 127.0.0.1:8008 与 127.0.0.1:8009（无 9000）
+```

@@ -1835,4 +1835,18 @@ Linux 运维强化基础检查已经完成。下一步可先做一次阶段复�
 
 1. 本轮记录已写入 `学习总结/ops_ansible_basics.md`（第十节）、`项目记录/memory.md`、`项目记录/ops_handoff.md`、`项目记录/ops_command_history.md` 与 `README.md`，等待用户提交（PowerShell + 代理）。
 2. Ansible 阶段主线结束。可选方向：Roles 与 `ansible-galaxy`、Ansible Vault、动态 inventory、`ansible-lint`/CI、在第二台真实节点上验证滚动发布。
-3. `README.md` 末尾「下一步：只读检查 `/var/lib/redis-noeviction-20260914` …」是 Redis 阶段的历史停点、已经过时，是否清理由用户决定。
+3. 已处理（2026-09-19）：`README.md` 里那句过时的 Redis「下一步」（检查并清理 `/var/lib/redis-noeviction-20260914`）已替换为「历史快照说明」并注明该项早已完成；2026-09-16 条目里「下方段落是 Redis 阶段的历史停点」的过期提示也已删除。
+## 2026-09-19 Roles 重构完成（第十一节）
+
+- 新增 `roles/nginx_site/`（`defaults`/`handlers`/`tasks`/`vars`/`meta`/`templates`）与 `deploy.yml`；完整代码见 `学习总结/ops_ansible_basics.md` 第十一节。旧 `nginx-deploy.yml` 保留作重构前对照，role 版为当前主用。
+- 关键点：脚手架不生成 `templates/`（可选目录，需自己建）；role 里模板用相对名；派生量放 `defaults` 后 playbook 里零变量；`hosts`/`become`/`serial` 留在 playbook。
+- 优先级实测：role `defaults` 最低（被 inventory 覆盖）→ inventory 主机变量 → role `vars`（压过 inventory）→ `-e`（压过 inventory；与 role `vars` 关系未测）。
+- 验收：`--syntax-check` 通过，两台全量复跑各 `ok=8 changed=0`、无 handler，行为与旧 playbook 一致。
+- 实验手法：用 `-e` 临时覆盖做实验，再用一次普通复跑把状态拉回代码声明的样子（不必手改文件）。
+- 当前环境：8008 / 8009 各 200，9000 已撤回；`roles/nginx_site/vars/main.yml` 为空（只有注释）。
+
+## 当前下一步（最新）
+
+1. 第十二节：Ansible Vault（密码不要外传、不要 `cat`，用不进 shell 历史的方式创建密码文件）。
+2. 之后可选：动态 inventory、`ansible-lint`/CI、第二台真实节点验证滚动发布；或转阶段 6（Prometheus/Grafana 监控告警）。
+3. 记录已写入 `学习总结/ops_ansible_basics.md` 第十一节、`项目记录/memory.md`、`项目记录/ops_handoff.md`、`项目记录/ops_command_history.md`、`README.md`，等待用户提交。
