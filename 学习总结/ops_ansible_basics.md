@@ -1802,8 +1802,185 @@ grep -rn 'site_port' roles/ deploy.yml templates/ inventory-prod.ini
 - `defaults` 优先级最低、role `vars` 高于 inventory 主机变量、`-e` 最高（与 role `vars` 的相对关系未实测）。**参数放错位置，两台机器会挤同一个端口。**
 - 重构的验收标准是行为不变（`changed=0`），不是"跑通"。
 - 本节不要重做。
+## 十二、Ansible Vault：把 become 凭据从命令行搬进加密文件（已完成）
+
+### 目标与验收标准
+
+前十一节的执行命令里始终带着 `-i inventory-prod.ini` 和 `-K`（本机 `sudo` 对 `atguigu` 需要密码，每次都要手输一次）。本节把这两段从命令行搬走：
+
+- 用一个整文件保管的 Vault 密码（`~/.ansible/vault_pass.txt`，权限 600）作为**钥匙**；
+- 用 `ansible-vault encrypt_string` 把 sudo 密码加密成**内联密文**写进 `group_vars/web/vault.yml`；
+- 用 `ansible.cfg` 固化「默认清单」和「钥匙位置」。
+
+验收标准：`ansible-playbook deploy.yml` **不带 `-i`、不带 `-K`** 能跑完，两台 `ok=8 changed=0`，且屏幕上（含终端历史）不出现任何凭据。
+
+### 三件套与设置命令
+
+| 产物 | 作用 | 权限要求 |
+|---|---|---|
+| `~/.ansible/vault_pass.txt` | 钥匙：解密用的 Vault 密码（明文） | 目录 700、文件 600，**绝不进仓库** |
+| `group_vars/web/vault.yml` | 锁：`ansible_become_pass: !vault \|` 内联密文 | 普通权限，**可以进仓库** |
+| `ansible.cfg` | 指路：默认清单 + 钥匙路径 | 普通权限，可以进仓库 |
+
+```bash
+cd /home/atguigu/ansible-practice
+mkdir -p ~/.ansible && chmod 700 ~/.ansible
+
+# ① 设置 Vault 密码：read -s 不回显，写完立刻 unset，避免留在 shell 变量里
+read -rsp '设置 Vault 密码（不回显，且不要和 sudo 密码相同）: ' VP && printf '%s\n' "$VP" > ~/.ansible/vault_pass.txt && unset VP ; chmod 600 ~/.ansible/vault_pass.txt ; ls -l ~/.ansible/vault_pass.txt
+
+# ② 加密 sudo 密码：明文只走管道，不落盘、不进 history
+mkdir -p group_vars/web
+{ printf -- '---\n'; read -rsp '输入 atguigu 的 sudo 密码（不回显）: ' SP && printf '%s' "$SP" | ansible-vault encrypt_string --vault-password-file ~/.ansible/vault_pass.txt --name 'ansible_become_pass'; unset SP; } >> group_vars/web/vault.yml
+
+# ③ 固化配置（用绝对路径，不给 ~ 展开留猜测空间）
+cat > ansible.cfg <<'CFG'
+[defaults]
+inventory = inventory-prod.ini
+vault_password_file = /home/atguigu/.ansible/vault_pass.txt
+CFG
+cat ansible.cfg
+```
+
+实测：`vault_pass.txt` 为 `-rw-------`、**7 字节**（= 输入的密码 + `printf` 补的那个换行，说明文件里没有多余空格）；`cat ansible.cfg` 回读与写入完全一致。
+
+### 校验手段的取舍
+
+- `ansible-vault view` / `decrypt` / `edit` / `rekey` 只作用于**整文件加密**的 vault 文件（第一行是 `$ANSIBLE_VAULT;1.1;AES256`）。
+- `encrypt_string` 产生的是**单个值的内联密文**，文件本身仍是普通 YAML（第一行 `---`）。对它用 `view` 必然报错（见坑 1）。
+- 看内联密文文件的结构：`head -n 4 group_vars/web/vault.yml | cat -A`（`cat -A` 把行尾显示成 `$`，可核对缩进是否真实存在）。
+- 验证「能不能解密」：用真实动作（`-b -m command -a 'whoami'`），不要用 `| length` 这类类型检查（见坑 3）。
+
+### 验收（三条证据）
+
+```bash
+# ① 功能验证：没有 -K，两台也能提权
+ansible -i inventory-prod.ini web -m command -a 'whoami' -b --vault-password-file ~/.ansible/vault_pass.txt
+
+# ② 回读配置
+cat ansible.cfg
+
+# ③ 真正的收益：不带 -i、不带 -K
+ansible-playbook deploy.yml
+```
+
+```text
+① localhost | CHANGED | rc=0 >> root
+   centos100 | CHANGED | rc=0 >> root
+③ 两段 PLAY（serial: 1 仍生效）；两台各 ok=8 changed=0；无 RUNNING HANDLER；没有出现 BECOME password:
+```
+
+### 三个坑（本节最值钱的部分）
+
+**坑 1：`ansible-vault view` 用在内联密文上必然报错**
+
+```bash
+ansible-vault view group_vars/web/vault.yml --vault-password-file ~/.ansible/vault_pass.txt > /dev/null && echo '解密成功'
+```
+
+```text
+ERROR! input is not vault encrypted data
+group_vars/web/vault.yml is not a vault encrypted file for group_vars/web/vault.yml
+```
+
+原因是 Vault 有两种形态、命令不通用：整文件加密（`encrypt`/`decrypt`/`view`/`edit`/`rekey`）与单值内联加密（`encrypt_string`）。`view` 只认前者。**这条报错不代表密文有问题**，是验证手段选错了（当时助手给的命令就不对）。
+
+**坑 2：缺 `--name` 前缀 → 文件不是合法的变量文件**
+
+`cat -A` 回读显示文件内容为：
+
+```text
+---$
+!vault |$
+          $ANSIBLE_VAULT;1.1;AES256$
+          6231666264643538...$
+```
+
+`!vault |` 只是**值片段**，不是变量；`group_vars` 的文件必须是「变量名: 值」的字典。修法（不必重输 sudo 密码，密文本身是好的）：
+
+```bash
+sed -i '2s/^/ansible_become_pass: /' group_vars/web/vault.yml
+head -n 4 group_vars/web/vault.yml | cat -A
+```
+
+`sed -i` 直接改文件；`2s/^/X/` 读作「只把第 2 行的行首替换成 X」，只动那一行，密文不受影响。
+
+根因**未定案**：最可能是粘贴到终端时 `--name 'ansible_become_pass'` 那段被吞（该通道已多次出现吞字符）。可用 `history | tail -n 3` 核对——`history` 记录的是终端实际收到的命令，且 `read -rsp` 的输入不进 history，所以贴出来是安全的。
+
+**坑 3：`AnsibleVaultEncryptedUnicode has no len()`**
+
+```bash
+ansible -i inventory-prod.ini web -m debug -a 'msg="decrypt_ok={{ (ansible_become_pass | length) > 0 }}"' --vault-password-file ~/.ansible/vault_pass.txt
+```
+
+```text
+localhost | FAILED! => {"msg": "Unexpected templating type error occurred on (...): object of type 'AnsibleVaultEncryptedUnicode' has no len()"}
+centos100 | FAILED! => （同样）
+```
+
+这条报错同时是**好消息**和**坏消息**：
+
+- 好消息：类型名 `AnsibleVaultEncryptedUnicode` 说明变量已被加载、且被识别成 vault 密文对象 → 坑 2 的 `sed` 生效了、文件结构对了。
+- 坏消息：2.9 的这个类没有实现 `__len__`，`length` 过滤器用不了（要取长度得先 `| string` 转成真字符串）。
+- 方法论：**「加载到密文」≠「能解密」**。解密对不对只能靠让 sudo 真的用一次（`whoami` 回 `root`）来证明——最终验收正是这么做的。
+
+### 运行时流程与安全边界
+
+```text
+ansible-playbook deploy.yml
+  ① 找配置  ./ansible.cfg → inventory=inventory-prod.ini、vault_password_file=~/.ansible/vault_pass.txt
+  ② 读清单  [web] = localhost(8008) / centos100(8009) → 匹配 hosts: web
+  ③ 载变量  group_vars/web/vault.yml 的 ansible_become_pass 以「密文对象」形态加载（此刻不解密）
+  ④ 触发解密  become 真要用它时才解，钥匙来自 ①，明文只在内存
+  ⑤ 提权    sudo → root
+  ⑥ 跑任务  输出里含秘密的任务要用 no_log: true 打码
+```
+
+配置查找顺序：`ANSIBLE_CONFIG` → `./ansible.cfg` → `~/.ansible.cfg` → `/etc/ansible/ansible.cfg`（当前目录优先级很高）。
+
+明文只出现在三处：加密时的输入（不落盘、不进 history）、运行时的内存、以及 `~/.ansible/vault_pass.txt` 那 7 个字节。所以最后这点是**唯一**需要长期保护的明文——密文和 `ansible.cfg` 反而可以安心进仓库，这正是这套设计的分工。
+
+### 三个隐性耦合点
+
+- **生效靠约定的变量名**：`ansible_become_pass`（别名 `ansible_become_password`）是 Ansible 认的名字。加密得再好，名字不对，`become` 照样问你 `BECOME password:`。
+- **`group_vars/web/` 的目录名 = 组名**：只对属于 `web` 组的主机生效。以后若有别的组也要 become 密码，得放 `group_vars/<组名>/` 或 `group_vars/all/`。
+- **副作用**：`ansible.cfg` 把默认清单定成了 `inventory-prod.ini`，所以跑需要别的清单的 playbook（如 `multi-host.yml` 用 `hosts: practice`）必须**显式 `-i inventory-multi.ini`**（显式参数优先于配置）。而且 `ansible.cfg` 是**按当前目录**查找的，`cd /tmp` 之后再用绝对路径跑 playbook，配置完全不生效、会退回「要 `-i`、要 `-K`」的老样子。
+
+### 以后要改东西
+
+- **换 sudo 密码**：重跑 ② 那条命令，并把 `>>` 换成 `>`（覆盖而不是追加，追加会产生两个同名键）。
+- **换 Vault 密码本身**：`ansible-vault rekey`，它会把文件里所有密文重新加密。**未实测**，2.9 对含内联密文的文件是否完全支持，建议先备份再试。
+- **加新机器**：只要它属于 `web` 组就自动有密码，无需改动任何文件。
+
+### 出问题时的排查对照
+
+| 症状 | 指向 |
+|---|---|
+| `Attempting to decrypt but no vault secrets found` | 没找到钥匙：`vault_password_file` 没生效（常见于在别的目录执行） |
+| `Decryption failed` | 钥匙不对：密码文件里的密码与加密时用的不一致 |
+| `input is not vault encrypted data` | 命令用错：`view`/`edit`/`decrypt` 只能开整文件加密的文件 |
+| `BECOME password:` 再次出现 | 变量没加载：目录名不是组名 / 变量名写错 / 文件不在位 |
+| `AnsibleVaultEncryptedUnicode has no len()` | 2.9 的类型限制：先 `| string` 再 `| length`，或改用功能验证 |
+
+### 遗留与当前状态
+
+- 本节核心（三件套 + 三条验收）已完成并实测。环境无新增监听端口：nginx master 仍 1314，`127.0.0.1:8008` 与 `:8009` 各 200，两台幂等。
+- **未执行**（命令已给出但没跑）：`no_log` 演示（用假密码对照「打码 / 不打码」）与收尾权限清点（`ls -l ansible.cfg group_vars/web/vault.yml ~/.ansible/vault_pass.txt`）。
+- **未核对**：`roles/nginx_site/defaults/main.yml` 里的 `site_port: 9000`（role 的兜底默认值）。正常部署被 inventory 的 8008/8009 覆盖，当前不影响结果；风险是**没在 inventory 写 `site_port` 的主机会静默使用 9000**，而 9000 恰在 SELinux 白名单内、不会报错。需决定是保留作兜底还是改掉。
+- **未实测**：`ansible-vault rekey`；拆掉配置各环节后的具体报错措辞；`ANSIBLE_CONFIG=/dev/null ansible-playbook deploy.yml` 的演示效果。
+
+### 小节结论
+
+- Vault 不是加密「清单」，是加密**值**：磁盘上只有钥匙文件那几字节是明文，其余都能见光。
+- 三件套分工清楚才安全：钥匙（`vault_pass.txt`，600、不进仓库）、锁（`vault.yml`，可进仓库）、指路（`ansible.cfg`，可进仓库）。
+- **延迟解密**：变量加载时是密文对象，被引用或 become 需要时才解——这也是坑 3 那个类型名的来源。
+- 生效靠**约定的变量名** + **目录名等于组名**，这两处是隐性耦合，扩展时最容易出错。
+- 验证要落到功能上：`whoami` 回 `root` 才算「密文能解开」；类型检查既证明不了正确性，还会撞上 2.9 的实现缺陷。
+- 命令行的收益是可见的：`-i` 和 `-K` 同时消失，屏幕上不再出现任何凭据。
+- 本节不要重做（除上面列出的三个尾巴）。
+
 ## 附：后续学习与验收
 
-Ansible 阶段已完成十一个小节（一～十一）：安装与本机连通性、Inventory、Ad-hoc 命令、Playbook 基础、变量与模板、handlers、handler 对接 Nginx reload（含 SELinux 端口排查）、`block`/`rescue` 错误处理、多主机与 `when` 条件、一键部署 Nginx 完整 playbook（含 SELinux 标签加固）、Roles 重构（含变量优先级实测）。以上内容不要重做。后续若新增小节（例如 Roles 重构），编号从这里顺延（十一、十二…），本节固定排在文件最后，只作为方向说明。
+Ansible 阶段已完成十二个小节（一～十二）：安装与本机连通性、Inventory、Ad-hoc 命令、Playbook 基础、变量与模板、handlers、handler 对接 Nginx reload（含 SELinux 端口排查）、`block`/`rescue` 错误处理、多主机与 `when` 条件、一键部署 Nginx 完整 playbook（含 SELinux 标签加固）、Roles 重构（变量优先级实测）、Ansible Vault（凭据加密与配置固化）。以上内容不要重做。后续若新增小节，编号从这里顺延（十三、十四…），本节固定排在文件最后，只作为方向说明。
 
-尚未开始的下一步方向（待用户选择，不属于已验收范围）：Ansible Vault、动态 inventory、`ansible-lint`/CI 集成、在第二台真实机器或容器上验证滚动发布。
+尚未开始的下一步方向（待用户选择，不属于已验收范围）：动态 inventory、`ansible-lint`/CI 集成、在第二台真实机器或容器上验证滚动发布。

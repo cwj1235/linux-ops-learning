@@ -5037,3 +5037,119 @@ ss -lntp | grep -E '8008|8009|9000'
 ```text
 两台各 ok=8 changed=0；监听只有 127.0.0.1:8008 与 127.0.0.1:8009（无 9000）
 ```
+
+## 2026-09-22 Ansible Vault（第十二节）
+
+### 造钥匙：设置 Vault 密码
+
+```bash
+cd /home/atguigu/ansible-practice
+mkdir -p ~/.ansible && chmod 700 ~/.ansible
+read -rsp '设置 Vault 密码（不回显，且不要和 sudo 密码相同）: ' VP && printf '%s\n' "$VP" > ~/.ansible/vault_pass.txt && unset VP ; chmod 600 ~/.ansible/vault_pass.txt ; ls -l ~/.ansible/vault_pass.txt
+```
+
+```text
+-rw-------. 1 atguigu atguigu 7 9月 22 16:41 /home/atguigu/.ansible/vault_pass.txt
+（7 字节 = 输入的密码 + printf 补的换行，说明文件里没夹带多余空格；密码本身不记录。）
+```
+
+### 造锁：加密 sudo 密码为内联密文
+
+```bash
+mkdir -p group_vars/web
+{ printf -- '---\n'; read -rsp '输入 atguigu 的 sudo 密码（不回显）: ' SP && printf '%s' "$SP" | ansible-vault encrypt_string --vault-password-file ~/.ansible/vault_pass.txt --name 'ansible_become_pass'; unset SP; } >> group_vars/web/vault.yml
+```
+
+```text
+（明文只走管道；group_vars/web/vault.yml 生成了 '!vault |' + '$ANSIBLE_VAULT;1.1;AES256' + 5 行 base64。）
+```
+
+### 误用 view 校验内联密文
+
+```bash
+cat group_vars/web/vault.yml ; ansible-vault view group_vars/web/vault.yml --vault-password-file ~/.ansible/vault_pass.txt > /dev/null && echo '解密成功'
+```
+
+```text
+ERROR! input is not vault encrypted data
+group_vars/web/vault.yml is not a vault encrypted file for group_vars/web/vault.yml
+（view 只作用于整文件加密的 vault 文件；内联密文用它必然报错，不代表密文坏了。）
+```
+
+### 回读结构：发现缺键名
+
+```bash
+head -n 4 group_vars/web/vault.yml | cat -A
+```
+
+```text
+---$
+!vault |$
+          $ANSIBLE_VAULT;1.1;AES256$
+          6231666264643538...$
+（第 2 行只有 !vault |，没有 ansible_become_pass: 前缀 → 文件不是"变量名: 值"的字典，Ansible 用不了。）
+```
+
+### 补键名（密文可复用）
+
+```bash
+sed -i '2s/^/ansible_become_pass: /' group_vars/web/vault.yml
+head -n 4 group_vars/web/vault.yml | cat -A
+```
+
+```text
+（该批输出未单独回传；sed 生效由下一条的报错类型间接证实——变量已被识别为 AnsibleVaultEncryptedUnicode。）
+```
+
+### length 过滤器在 2.9 上不可用
+
+```bash
+ansible -i inventory-prod.ini web -m debug -a 'msg="decrypt_ok={{ (ansible_become_pass | length) > 0 }}"' --vault-password-file ~/.ansible/vault_pass.txt
+```
+
+```text
+localhost | FAILED! => {"msg": "Unexpected templating type error occurred on (decrypt_ok={{ (ansible_become_pass | length) > 0 }}): object of type 'AnsibleVaultEncryptedUnicode' has no len()"}
+centos100 | FAILED! => （同样）
+（类型名证明变量已按密文对象加载；2.9 未实现 __len__，取长度需先 | string。）
+```
+
+### 功能验收：whoami 免 -K 提权
+
+```bash
+ansible -i inventory-prod.ini web -m command -a 'whoami' -b --vault-password-file ~/.ansible/vault_pass.txt
+```
+
+```text
+localhost | CHANGED | rc=0 >>
+root
+centos100 | CHANGED | rc=0 >>
+root
+（命令里没有 -K，也没有出现 BECOME password:。）
+```
+
+### 固化配置并做最终验收
+
+```bash
+cat > ansible.cfg <<'EOF'
+[defaults]
+inventory = inventory-prod.ini
+vault_password_file = /home/atguigu/.ansible/vault_pass.txt
+EOF
+cat ansible.cfg
+ansible-playbook deploy.yml
+```
+
+```text
+cat ansible.cfg：与写入内容一致。
+ansible-playbook deploy.yml：不带 -i、不带 -K；两段 PLAY（serial: 1 仍生效）；
+两台各 ok=8 changed=0；无 RUNNING HANDLER；没有出现 BECOME password:。
+回收：centos100 ok=8 changed=0 / localhost ok=8 changed=0。
+```
+
+### 本节未执行 / 未核对
+
+```text
+未执行：no_log 演示（nolog-demo.yml，用假密码对照打码与不打码）；ls -l ansible.cfg group_vars/web/vault.yml ~/.ansible/vault_pass.txt 权限清点。
+未核对：roles/nginx_site/defaults/main.yml 的 site_port: 9000 兜底值。
+未实测：ansible-vault rekey；拆配置各环节的报错措辞；ANSIBLE_CONFIG=/dev/null ansible-playbook deploy.yml。
+```

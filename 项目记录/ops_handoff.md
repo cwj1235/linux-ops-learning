@@ -1850,3 +1850,22 @@ Linux 运维强化基础检查已经完成。下一步可先做一次阶段复�
 1. 第十二节：Ansible Vault（密码不要外传、不要 `cat`，用不进 shell 历史的方式创建密码文件）。
 2. 之后可选：动态 inventory、`ansible-lint`/CI、第二台真实节点验证滚动发布；或转阶段 6（Prometheus/Grafana 监控告警）。
 3. 记录已写入 `学习总结/ops_ansible_basics.md` 第十一节、`项目记录/memory.md`、`项目记录/ops_handoff.md`、`项目记录/ops_command_history.md`、`README.md`，等待用户提交。
+
+## 2026-09-22 Ansible Vault（第十二节）完成
+
+- 目标：把 `-i inventory-prod.ini` 与 `-K` 从命令行搬走。三件套 = `~/.ansible/vault_pass.txt`（钥匙，目录 700 / 文件 600、**7 字节** = 密码 + 换行，不进仓库）、`group_vars/web/vault.yml`（内联密文 `ansible_become_pass: !vault |`，可进仓库）、`ansible.cfg`（`[defaults]` 里 `inventory = inventory-prod.ini` 与 `vault_password_file = /home/atguigu/.ansible/vault_pass.txt`，用绝对路径不给 `~` 展开留猜测）。
+- 加密手法：`read -rsp` 读密码 → `printf` 写文件 → 立即 `unset`；sudo 密码经管道喂给 `ansible-vault encrypt_string --name 'ansible_become_pass'`，明文不落盘、不进 history、不进输出。密码不写进任何记录。
+- 验收（三条均已实测）：① `ansible -i inventory-prod.ini web -m command -a 'whoami' -b --vault-password-file ~/.ansible/vault_pass.txt` → 两台 `CHANGED | rc=0 >> root`，无 `BECOME password:`；② `cat ansible.cfg` 回读与写入一致；③ `ansible-playbook deploy.yml` **不带 `-i` 不带 `-K`** → 两段 PLAY（`serial: 1` 仍生效）、两台各 `ok=8 changed=0`、无 `RUNNING HANDLER`、无 `BECOME password:`。
+- 坑 1：`ansible-vault view`（及 `decrypt`/`edit`/`rekey`）只作用于**整文件加密**的 vault 文件（首行 `$ANSIBLE_VAULT;1.1;AES256`）；`encrypt_string` 产出的是**单值内联密文**，文件本身仍是普通 YAML → 用 `view` 必然报 `input is not vault encrypted data` + `is not a vault encrypted file`，**不代表密文有问题**（当时是助手给错了验证命令）。
+- 坑 2：首次生成的 `vault.yml` 第 2 行只有 `!vault |`、**没有键名**（用 `head -n 4 group_vars/web/vault.yml | cat -A` 抓出，`cat -A` 的 `$` 行尾便于核对缩进），而 `group_vars` 要求「变量名: 值」的字典 → 修法 `sed -i '2s/^/ansible_become_pass: /' group_vars/web/vault.yml`（只动第 2 行，密文可复用、不必重输 sudo 密码）。根因**未定案**：最可能是粘贴到终端时 `--name 'ansible_become_pass'` 被吞（该通道已多次吞字符），可用 `history | tail` 核对（`read -rsp` 的输入不进 history，贴出来安全）。
+- 坑 3：`-a 'msg="{{ (ansible_become_pass | length) > 0 }}"'` 两台都 `FAILED! => object of type 'AnsibleVaultEncryptedUnicode' has no len()`——2.9 未实现 `__len__`（要取长度需先 `| string`）。正面价值：类型名证明变量**已按密文对象加载**。方法论：**「加载到密文」≠「能解密」**；解密正确性只能靠真实动作（`whoami` 回 `root`）证明，类型检查不算。
+- 概念：`become` 生效靠**约定的变量名**（`ansible_become_pass`，别名 `ansible_become_password`）；`group_vars/web/` 的目录名 = 组名，只对 `web` 组生效；**延迟解密**（加载时是密文，被引用/become 需要时才解）；`no_log` 只给输出打码、不是加密。
+- 副作用：`ansible.cfg` 把默认清单定死为 `inventory-prod.ini` → 跑 `multi-host.yml`（`hosts: practice`）必须显式 `-i inventory-multi.ini`（显式参数优先于配置）；且 cfg 按**当前目录**查找，`cd /tmp` 后配置失效、退回「要 `-i`、要 `-K`」。
+- 环境状态：无新增监听端口；nginx master 仍 1314；`127.0.0.1:8008` 与 `:8009` 各 200；两台幂等。
+
+## 当前下一步（最新）
+
+1. 第十二节的三个尾巴（命令已给、尚未执行）：`no_log` 演示（用假密码对照「打码 / 不打码」）、`ls -l ansible.cfg group_vars/web/vault.yml ~/.ansible/vault_pass.txt` 权限清点、核对并决定 `roles/nginx_site/defaults/main.yml` 里的 `site_port: 9000` 兜底值（未在 inventory 写 `site_port` 的主机会静默用它，且 9000 在 SELinux 白名单内不报错 → 属「能跑但不对」那类）。
+2. 未实测：`ansible-vault rekey`（2.9 对含内联密文的文件是否完全支持，建议先备份）、拆掉配置各环节后的报错措辞、`ANSIBLE_CONFIG=/dev/null ansible-playbook deploy.yml` 的演示效果。
+3. Ansible 阶段（一～十二）主线结束。可选方向：动态 inventory、`ansible-lint`/CI、在第二台真实节点（Docker 容器）验证滚动发布——**预告坑**：容器内无 systemd，`systemd: state=reloaded` 会失败，需改 `command: nginx -s reload`；或转阶段 6（Prometheus/Grafana 监控告警）。
+4. 记录已写入 `学习总结/ops_ansible_basics.md` 第十二节、`项目记录/memory.md`、`项目记录/ops_handoff.md`、`项目记录/ops_command_history.md`、`README.md`，等待用户提交。

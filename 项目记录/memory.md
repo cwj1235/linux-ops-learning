@@ -898,3 +898,19 @@ GitHub Actions 或同类流水线，实现测试、构建、镜像或发布、�
 - `README.md`「当前进度」末尾那句过时的 Redis「下一步」（只读检查并清理 `/var/lib/redis-noeviction-20260914`、确认 6381 无残留）已替换为「历史快照说明」：注明该实验早已收尾（`SHUTDOWN NOSAVE` 后 6381 拒连、临时目录已删除），并指向 `学习总结/ops_redis_basics.md` 与 memory 作为 Redis 阶段的收尾结论。
 - 同时删除 2026-09-16 条目里「下方 2026-09-14 段落里的『下一步』是 Redis 阶段的历史停点」这句已失效的提示。
 - 现在 `README.md`「当前进度」顶部就是最新进度，不再有指向 Redis 的假「下一步」。
+
+## 2026-09-22 Ansible Vault 完成（第十二节）
+
+- 目标是把 `-i inventory-prod.ini` 与 `-K` 从命令行搬走。三件套：`~/.ansible/vault_pass.txt`（钥匙，目录 700 / 文件 600、7 字节 = 密码 + 换行，**不进仓库**）、`group_vars/web/vault.yml`（内联密文 `ansible_become_pass: !vault |`，**可进仓库**）、`ansible.cfg`（`[defaults] inventory = inventory-prod.ini`、`vault_password_file = /home/atguigu/.ansible/vault_pass.txt`，用绝对路径不给 `~` 展开留猜测）。
+- 加密手法：`read -rsp` 读密码 → `printf` 写文件 → 立即 `unset`；sudo 密码经管道进 `ansible-vault encrypt_string --name 'ansible_become_pass'`，**明文不落盘、不进 history、不进输出**。密码不写入任何记录。
+- 验收（三条已实测）：① `ansible -i inventory-prod.ini web -m command -a 'whoami' -b --vault-password-file ~/.ansible/vault_pass.txt` → 两台 `CHANGED | rc=0 >> root`；② `cat ansible.cfg` 回读一致；③ `ansible-playbook deploy.yml` **不带 `-i` 不带 `-K`** → 两段 PLAY（`serial: 1` 仍生效）、两台各 `ok=8 changed=0`、无 `RUNNING HANDLER`、无 `BECOME password:`。
+- 坑 1：`ansible-vault view`（及 `decrypt`/`edit`/`rekey`）只作用于**整文件加密**的 vault 文件（首行 `$ANSIBLE_VAULT;1.1;AES256`）；`encrypt_string` 产出的是**单值内联密文**，文件本身仍是普通 YAML → 用 `view` 必然报 `input is not vault encrypted data` / `is not a vault encrypted file`，**不代表密文有问题**。
+- 坑 2：首次生成的 `vault.yml` 第 2 行只有 `!vault |`、**没有键名**（`head -n 4 group_vars/web/vault.yml | cat -A` 抓出），`group_vars` 要求「变量名: 值」的字典 → 修法 `sed -i '2s/^/ansible_become_pass: /' group_vars/web/vault.yml`（密文可复用，不必重输 sudo 密码）。根因**未定案**，最可能是粘贴到终端时 `--name 'ansible_become_pass'` 被吞（该通道已多次吞字符），可用 `history | tail` 核对（`read -rsp` 的输入不进 history，贴出来安全）。
+- 坑 3：`(ansible_become_pass | length) > 0` 报 `object of type 'AnsibleVaultEncryptedUnicode' has no len()`——2.9 未实现 `__len__`（取长度需先 `| string`）。正面价值：类型名证明变量**已按密文对象加载**。方法论：**「加载到密文」≠「能解密」**，解密正确性只能靠真实动作（`whoami` 回 `root`）证明。
+- 概念：`become` 生效靠**约定的变量名**（`ansible_become_pass`，别名 `ansible_become_password`）；`group_vars/web/` 的目录名 = 组名，只对 `web` 组生效；**延迟解密**（加载时是密文，被引用/become 需要时才解）；`no_log` 只给输出打码、不是加密（该演示尚未执行）。
+- 概念（安全边界）：明文只出现在加密时的输入、运行时内存、以及 `vault_pass.txt` 那 7 个字节；密文与 `ansible.cfg` 可安心进仓库，钥匙不行。
+- 副作用：`ansible.cfg` 把默认清单定死为 `inventory-prod.ini` → 跑 `multi-host.yml`（`hosts: practice`）必须显式 `-i inventory-multi.ini`；且 cfg 按**当前目录**查找，换目录执行配置即失效、退回「要 `-i`、要 `-K`」。
+- 未执行/未核对：`no_log` 演示；`ls -l ansible.cfg group_vars/web/vault.yml ~/.ansible/vault_pass.txt` 权限清点；`roles/nginx_site/defaults/main.yml` 的 `site_port: 9000` 兜底值。
+- 未实测：`ansible-vault rekey`、拆配置各环节的报错措辞、`ANSIBLE_CONFIG=/dev/null` 演示。
+- 环境状态：无新增监听端口；nginx master 仍 1314；`127.0.0.1:8008` / `:8009` 各 200；两台幂等。Ansible 阶段（一～十二）主线结束。
+- 本节不要重做（除上述三个尾巴）。

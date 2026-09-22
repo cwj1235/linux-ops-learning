@@ -78,6 +78,8 @@ new-chat/
 
 ## 当前进度
 
+2026-09-22：Ansible Vault（第十二节）完成，`-i` 与 `-K` 从命令行消失。三件套：`~/.ansible/vault_pass.txt`（钥匙，目录 700 / 文件 600、7 字节，**不进仓库**）、`group_vars/web/vault.yml`（`ansible_become_pass: !vault |` 内联密文，**可进仓库**）、`ansible.cfg`（`[defaults]` 里固化默认清单与钥匙路径，用绝对路径）。加密手法是 `read -rsp` 读密码 + 管道喂给 `ansible-vault encrypt_string`，明文不落盘、不进 history、不进输出。验收三条：`whoami` 免 `-K` 两台回 `root`；`ansible-playbook deploy.yml` 不带 `-i` 不带 `-K` 跑通，两台各 `ok=8 changed=0`、无 `BECOME password:`。过程撞到三个坑并定案：① `ansible-vault view`/`decrypt`/`edit`/`rekey` 只认整文件加密的 vault 文件，用在内联密文上必然报 `input is not vault encrypted data`；② 缺 `--name` 前缀会让文件只有 `!vault |` 而没有键名，`group_vars` 要求「变量名: 值」的字典，用 `sed -i '2s/^/ansible_become_pass: /'` 补名即可（密文可复用）；③ 2.9 的 `AnsibleVaultEncryptedUnicode` 没实现 `__len__`，`| length` 会报 `has no len()`，但它同时证明变量已按密文对象加载——「加载到密文」≠「能解密」，解密正确性只能靠真实动作证明。副作用：默认清单被定死为 `inventory-prod.ini`，跑 `multi-host.yml` 需显式 `-i inventory-multi.ini`；且 `ansible.cfg` 按当前目录查找，换目录执行即失效。
+
 2026-09-19：Ansible Roles 重构完成。用 `ansible-galaxy init` 生成 `roles/nginx_site`（`defaults`/`handlers`/`tasks`/`vars`/`meta`/`templates`），把原 `nginx-deploy.yml` 的任务、handler、模板按职责搬进 role，新 playbook `deploy.yml` 只剩 `hosts`/`become`/`serial` 加 `roles: [nginx_site]`；两个模板 `cp` 原样搬入无需修改，模板引用改为相对名。验收标准是纯重构：`--syntax-check` 通过、全量复跑两台各 `ok=8 changed=0`、无 RUNNING HANDLER，行为与旧 playbook 完全一致。并实测变量优先级：role `defaults` 最低（被 inventory 覆盖）、inventory 主机变量居中、role `vars` 高于 inventory（`changed=3`、端口变 9000）、`-e` 高于 inventory。过程中纠正一次预测失误（`changed=2` 实为 3，因为 `site_port` 同时被首页模板引用），并确立「改变量前先 `grep -rn` 列引用点」的做法。
 
 2026-09-18：Ansible 一键部署 Nginx 完整 playbook 已完成。新增 `inventory-prod.ini`（`[web]` 两台主机各自的 `site_port`）、`templates/index.html.j2`、`templates/nginx-site.conf.j2` 与 `nginx-deploy.yml`（`serial: 1` 滚动发布、`yum` 幂等装包、`file` 建站点目录、`template` 部署首页与站点配置、`block` + `uri` 自检、`rescue` 回滚 + `fail` 报红）。实测首跑两台各 `ok=9 changed=4`、幂等复跑 `ok=8 changed=0`、`chcon -t var_t` 破坏后复跑 `changed=1` 自愈、删除目录后重建 `ok=9 changed=4` 且新目录标签立即正确。关键发现：`copy`/`template` 落地文件会自动套策略默认 SELinux 标签，`file` 模块建目录和建文件都不会，必须显式 `setype: httpd_sys_content_t`；修复既有偏差用 `restorecon`（策略里已有 `/var/www(/.*)?` 规则，无需 `semanage fcontext`），`chcon` 只用于临时验证。至此 Ansible 阶段十个小节全部完成。
@@ -127,7 +129,7 @@ Redis 内存上限：128 MiB 已写入配置文件，2026-09-14 17:10 服务重�
 当前练习键：practice:rdb-check 在正常重启后仍读到 rdb-ok，与备份一并保留，尚未清理
 Redis AOF：`appendonly yes` 已写入 `/etc/redis.conf`；`/var/lib/redis/appendonly.aof` 已生成，重启日志确认从 AOF 加载，`practice:aof-check` 读回 `aof-ok`
 Docker 安装、镜像加速、容器生命周期、数据卷、端口映射、Dockerfile 与 Compose 编排：已完成
-Ansible 安装与 Inventory、Ad-hoc 命令、Playbook 基础、变量与模板、handlers、handler 对接 Nginx reload（含 SELinux 端口排查）、block/rescue 错误处理、多主机与 when 条件、一键部署 Nginx（含 SELinux 标签加固）、Roles 重构（变量优先级实测）：已完成
+Ansible 安装与 Inventory、Ad-hoc 命令、Playbook 基础、变量与模板、handlers、handler 对接 Nginx reload（含 SELinux 端口排查）、block/rescue 错误处理、多主机与 when 条件、一键部署 Nginx（含 SELinux 标签加固）、Roles 重构（变量优先级实测）、Ansible Vault（become 凭据加密 + ansible.cfg 固化，命令不再需要 -i/-K）：已完成
 ```
 
 说明：上面 `text` 块里 2026-09-14 前后的 Redis 条目是当时阶段的历史快照。其中原本写的「下一步」（只读检查并清理 `/var/lib/redis-noeviction-20260914`、确认 6381 无残留监听）**已经完成**：隔离实例 `SHUTDOWN NOSAVE` 后 6381 连接被拒，临时目录内容确认后已删除（`ls -ld` 返回「没有那个文件或目录」）。Redis 阶段的收尾结论以 `学习总结/ops_redis_basics.md` 和 `项目记录/memory.md` 为准：正式实例 128 MiB 上限与 noeviction 策略已验收，配置备份与原始数据/AOF 保留；性能调优、断电恢复和高可用仍未验证。
