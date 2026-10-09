@@ -1965,8 +1965,8 @@ ansible-playbook deploy.yml
 ### 遗留与当前状态
 
 - 本节核心（三件套 + 三条验收）已完成并实测。环境无新增监听端口：nginx master 仍 1314，`127.0.0.1:8008` 与 `:8009` 各 200，两台幂等。
-- **未执行**（命令已给出但没跑）：`no_log` 演示（用假密码对照「打码 / 不打码」）与收尾权限清点（`ls -l ansible.cfg group_vars/web/vault.yml ~/.ansible/vault_pass.txt`）。
-- **未核对**：`roles/nginx_site/defaults/main.yml` 里的 `site_port: 9000`（role 的兜底默认值）。正常部署被 inventory 的 8008/8009 覆盖，当前不影响结果；风险是**没在 inventory 写 `site_port` 的主机会静默使用 9000**，而 9000 恰在 SELinux 白名单内、不会报错。需决定是保留作兜底还是改掉。
+- **2026-10-09 已补验**：`no_log` 假数据对照与权限清点均通过，详见下方收尾复核。
+- **2026-10-09 已回读更正**：当前 `roles/nginx_site/defaults/main.yml` 没有 `site_port`；role vars 只有注释；inventory 显式指定 8008/8009。旧的 9000 兜底不在当前文件中，无需删除或补回，何时移除未核实。
 - **未实测**：`ansible-vault rekey`；拆掉配置各环节后的具体报错措辞；`ANSIBLE_CONFIG=/dev/null ansible-playbook deploy.yml` 的演示效果。
 
 ### 小节结论
@@ -1977,10 +1977,114 @@ ansible-playbook deploy.yml
 - 生效靠**约定的变量名** + **目录名等于组名**，这两处是隐性耦合，扩展时最容易出错。
 - 验证要落到功能上：`whoami` 回 `root` 才算「密文能解开」；类型检查既证明不了正确性，还会撞上 2.9 的实现缺陷。
 - 命令行的收益是可见的：`-i` 和 `-K` 同时消失，屏幕上不再出现任何凭据。
-- 本节不要重做（除上面列出的三个尾巴）。
+- 本节、三个收尾项及 2026-10-09 完整部署复验均已完成，不要重做。
+
+### 2026-10-09 收尾复核（已验证）
+
+环境：Ansible 2.9.27 使用 Python 2.7.5，读取 `/home/atguigu/ansible-practice/ansible.cfg`。权限回读：`.ansible` 目录 700，钥匙文件 600，`ansible.cfg` 和 `group_vars/web/vault.yml` 均为 664，所有者/组均为 atguigu。664 允许同组修改，不能当作生产最小权限已经完成。
+
+用户创建并运行 `nolog-demo.yml`：
+
+```yaml
+---
+- name: Compare normal output and no_log
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  become: false
+  vars:
+    demo_value: "training-only-not-a-real-password"
+  tasks:
+    - name: Show the demonstration value normally
+      debug:
+        var: demo_value
+    - name: Hide the demonstration value
+      debug:
+        var: demo_value
+      no_log: true
+```
+
+实测：第一个任务显示假数据，第二个任务只有 `ok: [localhost]`，不显示变量值，也没有 `censored` 字样；RECAP 为 `ok=2 changed=0 unreachable=0 failed=0`。因此判断隐藏成功看的是任务是否暴露结果，不要求某句固定提示。`no_log` 只保护当前任务，不会抹去前一个任务已打印的同一变量；它不是加密。
+
+变量文件回读结论：
+
+- defaults 只有 `site_name: ops-demo` 和由它派生的 `site_root`、`conf_file`，没有 `site_port`。
+- vars 只有注释，没有高优先级端口变量。
+- inventory 为 localhost 显式指定 8008，为 centos100 显式指定 8009；两者仍是同一台虚拟机的两个身份。
+- 变量核对时没有修改 defaults、vars 或 inventory。现状无需删除 9000，也不应按过期记录补回；随后只修改了 tasks 中的 HTTP 条件。若新增主机未定义 `site_port` 且没有其他变量来源，引用时会遇到未定义变量；这个失败分支本轮未做实验。
+
+三个收尾项核验完成；后续 HTTP 条件修正、逻辑测试和完整部署复验也已通过，见下一小节。演示文件保留供复习，未变更真实凭据。
+
+### 2026-10-09 HTTP 条件修正与完整部署复验（已通过）
+
+#### 根因与当前代码
+
+第十、十一节的代码保留了当时的历史写法。原自定义失败条件只判断正文是否包含站点名；`failed_when` 会影响任务最终失败判定，因此即使 uri 默认预期 200，也可能把“状态码 500，但正文包含 ops-demo”的响应判成成功。当前 role 应使用本节的新条件，不再复制旧条件。
+
+用户修改前已备份：`roles/nginx_site/tasks/main.yml.before-http-check-20261009-193403`。修改后的实际片段已通过 sed 回读：
+
+```yaml
+    - name: Verify site is serving
+      uri:
+        url: "http://127.0.0.1:{{ site_port }}/"
+        return_content: true
+      register: site_resp
+      failed_when: >-
+        (site_resp.status | default(-1) | int) != 200 or
+        site_name not in (site_resp.content | default(''))
+```
+
+- `>-` 将多行折叠为同一个条件表达式。
+- 状态码不是 200，或者正文缺少站点名，任意一项成立就失败。
+- 缺少 status 时使用 -1；缺少 content 时使用空字符串，避免字段缺失错误掩盖真正的 HTTP 问题。
+- 使用 `or`，不能直接拆成两个列表条目；Ansible 的失败条件列表默认按 AND 合并。
+- 本次未修改端口、密文、handler 或 rescue。rescue 删除站点配置再 reload，并非恢复修改前的所有文件。
+
+#### 验证顺序与实测结果
+
+1. 当前文件回读：deploy.yml 调用 nginx_site role，become:true、serial:1；ansible.cfg 指定默认清单及钥匙路径。
+2. `ansible-playbook deploy.yml --list-hosts` 不带 -i，匹配 web 组的 localhost、centos100。它不执行部署，不证明连接或提权。
+3. `ansible-playbook deploy.yml --syntax-check` 通过；语法检查不等于运行逻辑正确。
+4. `http-condition-test.yml` 用独立的本机 assert 循环检查五个假响应。未调用部署 role，未发送 HTTP 请求，不会触发真实配置回滚。
+
+| 样本 | expected_failed | 断言结果 |
+|---|---|---|
+| 200，正文含 ops-demo | false | 通过 |
+| 200，正文不含 ops-demo | true | 通过 |
+| 500，正文含 ops-demo | true | 通过，覆盖原漏判 |
+| 缺少状态码 | true | 通过 |
+| 200，缺少正文 | true | 通过 |
+
+五个样本都正确匹配预期；一个循环任务汇总为 `ok=1 changed=0 unreachable=0 failed=0`。异常样本显示 ok 表示“失败判断正确”，不是异常响应可以通过部署。
+
+5. 用户执行真实部署：
+
+```bash
+ansible-playbook deploy.yml
+```
+
+没有 -i、没有 -K、没有密码提示。实际输出：
+
+```text
+node=localhost port=8008 root=/var/www/ops-demo-localhost
+localhost HTTP 200，页面已包含站点名 ops-demo
+node=centos100 port=8009 root=/var/www/ops-demo-centos100
+centos100 HTTP 200，页面已包含站点名 ops-demo
+
+centos100 : ok=8 changed=0 unreachable=0 failed=0 skipped=0 rescued=0 ignored=0
+localhost : ok=8 changed=0 unreachable=0 failed=0 skipped=0 rescued=0 ignored=0
+```
+
+#### 验收边界与下一步
+
+- 默认配置与目标匹配、带 become 的部署功能链路、实际 HTTP 200/页面标记和本轮幂等性均有用户输出证据。没有单独清理 sudo 缓存或检查免密策略，不能说本轮已隔离证明 Vault 密码是唯一提权来源。
+- 两个 PLAY 是 serial:1 的分批执行，不代表有两台独立主机。
+- changed=0，因此没有触发 handler；rescued=0，说明未进入回滚。只验证了正常部署路径和假数据条件，没有重测真实异常回滚或 reload 故障。
+- HTTP 检查访问受管节点回环地址，不证明外部网络、防火墙或公网可达；正文站点名是基础标记，不等于完整业务验收。
+- Ansible 主线收尾，下一步进入阶段 6。先取内存、磁盘和监听端口基线，再选择兼容 CentOS 7 的监控部署方案；备份及两份假数据演示文件保留。
 
 ## 附：后续学习与验收
 
 Ansible 阶段已完成十二个小节（一～十二）：安装与本机连通性、Inventory、Ad-hoc 命令、Playbook 基础、变量与模板、handlers、handler 对接 Nginx reload（含 SELinux 端口排查）、`block`/`rescue` 错误处理、多主机与 `when` 条件、一键部署 Nginx 完整 playbook（含 SELinux 标签加固）、Roles 重构（变量优先级实测）、Ansible Vault（凭据加密与配置固化）。以上内容不要重做。后续若新增小节，编号从这里顺延（十三、十四…），本节固定排在文件最后，只作为方向说明。
 
-尚未开始的下一步方向（待用户选择，不属于已验收范围）：动态 inventory、`ansible-lint`/CI 集成、在第二台真实机器或容器上验证滚动发布。
+主线下一步：进入阶段 6（监控、日志、告警与故障响应），Ansible 完整部署复验已通过。动态 inventory、`ansible-lint`/CI 集成、独立多节点验证仍为可选补强，不作为进入监控的前置条件。

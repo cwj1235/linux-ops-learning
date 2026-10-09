@@ -5153,3 +5153,118 @@ ansible-playbook deploy.yml：不带 -i、不带 -K；两段 PLAY（serial: 1 �
 未核对：roles/nginx_site/defaults/main.yml 的 site_port: 9000 兜底值。
 未实测：ansible-vault rekey；拆配置各环节的报错措辞；ANSIBLE_CONFIG=/dev/null ansible-playbook deploy.yml。
 ```
+
+## 2026-10-09 Ansible 收尾：权限、no_log 与端口变量
+
+### 版本、配置路径与权限（用户已执行）
+
+```bash
+cd /home/atguigu/ansible-practice
+ansible --version
+ls -ld ~/.ansible ~/.ansible/vault_pass.txt ansible.cfg group_vars/web/vault.yml
+```
+
+结果：Ansible 2.9.27、Python 2.7.5；配置文件为 `/home/atguigu/ansible-practice/ansible.cfg`。`.ansible` 目录 700、钥匙文件 600、配置/密文文件 664，所有者/组均为 atguigu。没有读取密码内容或修改权限。
+
+### no_log 假数据对照（用户已执行）
+
+用户用单引号 heredoc 创建 `nolog-demo.yml`，完整演示配置见 Ansible 笔记“2026-10-09 收尾复核”。
+
+```bash
+ansible-playbook nolog-demo.yml
+```
+
+```text
+TASK [Show the demonstration value normally]
+ok: [localhost] => {
+    "demo_value": "training-only-not-a-real-password"
+}
+
+TASK [Hide the demonstration value]
+ok: [localhost]
+
+PLAY RECAP
+localhost : ok=2 changed=0 unreachable=0 failed=0 skipped=0 rescued=0 ignored=0
+```
+
+隐藏任务没有打印变量值，也没有 censored 文案；这是实际输出，不按预期模板补造。演示本机执行、不采集 facts、不提权，不改变部署服务。
+
+### 端口变量回读（用户已执行）
+
+```bash
+cat roles/nginx_site/defaults/main.yml
+cat roles/nginx_site/vars/main.yml
+cat inventory-prod.ini
+```
+
+defaults 仅含 site_name、site_root、conf_file，没有 site_port；vars 只有注释。inventory 实际内容：
+
+```ini
+[web]
+localhost ansible_connection=local site_port=8008
+centos100 ansible_host=127.0.0.1 ansible_user=atguigu site_port=8009
+```
+
+上述变量核对时没有编辑 role 或 inventory。旧记录中“当前有 site_port: 9000 兜底”不符合回读结果；何时移除没有证据，不记录为本轮删除。后续对 role tasks 的 HTTP 条件修改见下一节。
+
+### 当时的待办（后续已完成）
+
+三个收尾项结束时，完整部署复验仍待执行；随后用户实际完成 HTTP 修正、假数据测试和整体部署，结果见下一节，不再是当前待办。
+
+## 2026-10-09 HTTP 条件修正、假响应测试与完整部署
+
+### 当前配置与清单匹配（用户已执行）
+
+```bash
+cat deploy.yml ansible.cfg
+cat roles/nginx_site/tasks/main.yml
+cat roles/nginx_site/handlers/main.yml
+ansible-playbook deploy.yml --list-hosts
+```
+
+回读确认入口调用 nginx_site，become:true、serial:1；默认清单为 inventory-prod.ini，钥匙路径为 /home/atguigu/.ansible/vault_pass.txt。--list-hosts 显示 web 组两个目标 centos100、localhost。此时未执行部署。
+
+### 备份、编辑、语法与回读（用户已执行）
+
+```bash
+cp -pnv roles/nginx_site/tasks/main.yml "roles/nginx_site/tasks/main.yml.before-http-check-$(date +%Y%m%d-%H%M%S)"
+vim roles/nginx_site/tasks/main.yml
+ansible-playbook deploy.yml --syntax-check
+sed -n '/name: Verify site is serving/,/name: Show verification result/p' roles/nginx_site/tasks/main.yml
+```
+
+备份成功，实际目标为 `main.yml.before-http-check-20261009-193403`。用户两次打开 vim，不据此推定修改次数；语法检查返回 `playbook: deploy.yml`，回读确认失败表达式改为：
+
+```yaml
+      failed_when: >-
+        (site_resp.status | default(-1) | int) != 200 or
+        site_name not in (site_resp.content | default(''))
+```
+
+### 五种假响应（用户已执行）
+
+```bash
+ansible-playbook http-condition-test.yml
+```
+
+五个 assert 循环项均返回 `The failure decision matches the expected result`：200+正确正文→false；200+错误正文、500+正确正文、缺少 status、缺少 content→true。汇总 `ok=1 changed=0 unreachable=0 failed=0 skipped=0 rescued=0 ignored=0`。未请求真实站点、未触发部署 role 的回滚。
+
+### 完整部署复验（用户已执行）
+
+```bash
+ansible-playbook deploy.yml
+```
+
+两个 PLAY、无 -i/-K、无密码提示。目标与 HTTP 输出：
+
+```text
+node=localhost port=8008 root=/var/www/ops-demo-localhost
+localhost HTTP 200，页面已包含站点名 ops-demo
+node=centos100 port=8009 root=/var/www/ops-demo-centos100
+centos100 HTTP 200，页面已包含站点名 ops-demo
+
+centos100 : ok=8 changed=0 unreachable=0 failed=0 skipped=0 rescued=0 ignored=0
+localhost : ok=8 changed=0 unreachable=0 failed=0 skipped=0 rescued=0 ignored=0
+```
+
+本轮幂等复验通过，未运行 handler、未进入 rescue；未主动制造 HTTP 500 或独立排除 sudo 缓存/免密规则。两个身份属于同一虚拟机。下一步阶段 6 的 `free -h`、`df -h /`、`ss -lnt` 尚未回传，不记为已执行。

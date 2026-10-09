@@ -4,7 +4,13 @@
 
 用途：重开 Codex 线程、切换到 DeepSeek/GLM/Claude Code，或之后复习时，让新模型快速接上当前学习进度。
 
-最后更新：2026-09-16
+最后更新：2026-10-09
+
+## 当前接续摘要（2026-10-09 原始会话复核）
+
+- 最新实操：2026-10-09 三个收尾项已核验，HTTP 失败条件已修正，五种假响应测试通过；完整部署两个身份各 `ok=8 changed=0 unreachable=0 failed=0 rescued=0`，8008/8009 各 HTTP 200、正文含 ops-demo。当前 defaults 没有 9000 端口兜底，不要补回。
+- Ansible 主线收尾。下一步进入阶段 6：先讲指标、日志、告警与手工巡检的关系，回传内存、根分区、监听端口基线后再选择兼容当前 CentOS 7 的安装方案。不要再次安排 no_log、默认值核对、HTTP 假数据测试或部署复验作为待办。
+- 下文保留历史快照，其中旧的“下一步”“等待提交”不代表当前状态；以本摘要和文件末尾的接续清单为准。
 
 ## 历史接续点（Redis noeviction 小节，最新停点见文件末尾的 Ansible 小节）
 
@@ -1863,9 +1869,11 @@ Linux 运维强化基础检查已经完成。下一步可先做一次阶段复�
 - 副作用：`ansible.cfg` 把默认清单定死为 `inventory-prod.ini` → 跑 `multi-host.yml`（`hosts: practice`）必须显式 `-i inventory-multi.ini`（显式参数优先于配置）；且 cfg 按**当前目录**查找，`cd /tmp` 后配置失效、退回「要 `-i`、要 `-K`」。
 - 环境状态：无新增监听端口；nginx master 仍 1314；`127.0.0.1:8008` 与 `:8009` 各 200；两台幂等。
 
-## 当前下一步（最新）
+## 当前下一步（2026-10-09 会话复核）
 
-1. 第十二节的三个尾巴（命令已给、尚未执行）：`no_log` 演示（用假密码对照「打码 / 不打码」）、`ls -l ansible.cfg group_vars/web/vault.yml ~/.ansible/vault_pass.txt` 权限清点、核对并决定 `roles/nginx_site/defaults/main.yml` 里的 `site_port: 9000` 兜底值（未在 inventory 写 `site_port` 的主机会静默用它，且 9000 在 SELinux 白名单内不报错 → 属「能跑但不对」那类）。
-2. 未实测：`ansible-vault rekey`（2.9 对含内联密文的文件是否完全支持，建议先备份）、拆掉配置各环节后的报错措辞、`ANSIBLE_CONFIG=/dev/null ansible-playbook deploy.yml` 的演示效果。
-3. Ansible 阶段（一～十二）主线结束。可选方向：动态 inventory、`ansible-lint`/CI、在第二台真实节点（Docker 容器）验证滚动发布——**预告坑**：容器内无 systemd，`systemd: state=reloaded` 会失败，需改 `command: nginx -s reload`；或转阶段 6（Prometheus/Grafana 监控告警）。
-4. 记录已写入 `学习总结/ops_ansible_basics.md` 第十二节、`项目记录/memory.md`、`项目记录/ops_handoff.md`、`项目记录/ops_command_history.md`、`README.md`，等待用户提交。
+1. 三个收尾项、HTTP 条件修正和完整部署复验均已完成。当前端口由 inventory 显式指定，两个身份分别是 localhost:8008、centos100:8009；最新结果均 `ok=8 changed=0 failed=0 unreachable=0 rescued=0`，对应页面 HTTP 200 且包含 ops-demo。不要重做。
+2. 当前主线进入阶段 6：指标、日志、告警概念与资源基线 → node_exporter → Prometheus → Grafana → 告警和故障演练。下一批仅在 CentOS 执行 `free -h`、`df -h /`、`ss -lnt`，当前尚无这批输出，也尚未安装监控组件；不把旧的约 2 GiB 内存等快照当作今日容量结论。旧 CentOS 7 保持隔离，安装前检查版本兼容性，不直接暴露到公网。
+3. 动态 inventory、`ansible-lint`/CI、额外 Vault 故障实验和真实多节点验证属于可选补强，不是进入监控的前置条件。不要将 `rekey` 直接作用于当前含内联 `!vault` 值的普通 YAML；整文件加密与内联值加密的轮换方式需分开，当前不做凭据变更。
+4. 能力边界：`localhost` 与 `centos100` 是同一台 CentOS 虚拟机的两个清单身份，不是两台独立主机；Ansible 产物已覆盖 Nginx 静态站点和基础配置，但尚未覆盖路线中要求的后端部署。旧课程已有 `backend-demo` 示例，不能说机器从未有过后端。真实跨机部署和后端自动化部署保留为后续补强项。
+5. Git 本地核验：复核开始时工作区干净，HEAD 与本地上游跟踪引用均为 `7127001`；本次未联网刷新远端。当前五份文档包含会话复核、三个收尾项、HTTP 修正和完整部署验收的新增归档，未提交或推送。虚拟机上的实际 YAML 不在当前仓库中；备份与两个假数据演示文件保留在 CentOS 供复习。
+6. 证据层级：9 月 22 日和 9 月 29 日原始会话用于恢复历史；本次 chat `01a11e16-a8fb-73e3-bfe7-6271e368b00b` 中的用户回传提供当前文件、测试和部署证据。没有主动制造真实 HTTP 500 或重测 rescue；本轮幂等部署未触发 handler，不能据此称其失败路径也重新验证。无 `-K` 的功能链路成功，但未单独排除 sudo 缓存/免密规则，不声称已隔离证明 Vault 是唯一提权来源。助手没有连接虚拟机代做操作。

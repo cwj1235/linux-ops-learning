@@ -914,3 +914,33 @@ GitHub Actions 或同类流水线，实现测试、构建、镜像或发布、�
 - 未实测：`ansible-vault rekey`、拆配置各环节的报错措辞、`ANSIBLE_CONFIG=/dev/null` 演示。
 - 环境状态：无新增监听端口；nginx master 仍 1314；`127.0.0.1:8008` / `:8009` 各 200；两台幂等。Ansible 阶段（一～十二）主线结束。
 - 本节不要重做（除上述三个尾巴）。
+
+## 2026-10-09 原始会话复核与接续
+
+- 复核范围：盘点并检索项目 25 份正文、2 份历史 Redis 补丁；按项目工作目录筛选 24 条会话（含当前会话），解析 45 份原始/恢复日志并检索用户/助手消息，重点逐条核对 9 月 22 日和 9 月 29 日收尾段。不将全文检索描述成逐字阅读所有历史消息。
+- 最新实操：9 月 22 日 `ansible-playbook deploy.yml` 不带 `-i/-K`，两个清单身份各 `ok=8 changed=0 failed=0`；9 月 29 日只是重新给出收尾命令，用户没有回传运行结果。`no_log` 假数据对照、收尾权限清点、9000 默认值核对与决定仍待完成；“好的”不等于验收通过。
+- 当前主线：先恢复环境并完成上述三个尾巴，再进入阶段 6（指标/日志/告警、node_exporter、Prometheus、Grafana、告警与故障复盘）。额外 Vault 故障实验、动态 inventory、lint/CI 和真多机演练不是监控阶段的前置条件；没有找到监控安装的用户实操证据。
+- 边界：Ansible 的 localhost/centos100 指向同一台虚拟机，不能写成独立双机部署；当前 role 部署的是 Nginx 静态站点与基础配置，路线中的后端自动化部署尚待补齐。旧课程已有 backend-demo 示例，不能据此声称环境没有后端。
+- Git：复核开始时工作区干净，HEAD 与本地上游跟踪引用均为 `7127001`，9 月 22 日记录不再“等待提交”；未联网核对实时远端。本次只补记接续信息，未提交、未推送、未在虚拟机运行实验。历史 PID、端口和 HTTP 结果均须与今日状态区分。
+- 教学接续：在 `/home/atguigu/ansible-practice` 先给 1～3 条只读命令核对版本、配置位置与权限，再按小节推进；不要求重建 Vault，不打印真实凭据。内联密文 YAML 不直接用整文件 `rekey` 轮换。
+
+## 2026-10-09 Ansible 三个收尾项已核验
+
+- 用户实际回传：Ansible 2.9.27、Python 2.7.5，配置路径为 `/home/atguigu/ansible-practice/ansible.cfg`；`.ansible` 目录 700、`vault_pass.txt` 600、配置与密文文件 664，均为 atguigu:atguigu。未读取真实密码内容，未修改权限。664 允许同组写入，不等于生产加固完成。
+- 用户创建 `nolog-demo.yml`，用假数据分别执行普通 debug 和 `no_log: true` 的 debug。本机执行、不采集 facts、不提权。普通任务显示变量值，隐藏任务只有 `ok: [localhost]`、不显示值且没有 censored 字样；RECAP 为 `ok=2 changed=0 unreachable=0 failed=0`。隐藏效果已实测，不再要求固定的 censored 文案。
+- 三文件回读：role defaults 只有 site_name、site_root、conf_file，**没有 site_port**；role vars 只有注释；inventory 显式为 localhost 配 8008、centos100 配 8009。此前“当前仍有 9000 兜底”的记录过时，本轮未删除/新增变量，无法据此确定旧值何时被移除。维持当前显式配置，不补回 9000。
+- 三项收尾核对完成；下一步仅做一次 `ansible-playbook deploy.yml` 整体复验，再进阶段 6 监控。复验尚无本轮输出，不能把历史的两个身份 ok=8 changed=0、HTTP 200 或 PID 当作今日已验证结果。假数据演示文件保留供复习。
+
+## 2026-10-09 HTTP 验收修正与 Ansible 最终复验通过
+
+- 当前 deploy.yml、ansible.cfg、role tasks/handlers 已由用户回读；不带 `-i` 的 `--list-hosts` 匹配 web 组两个身份。发现原 `failed_when` 只检查站点名，自定义条件会覆盖模块失败判定，可能漏判含 ops-demo 的 HTTP 500。
+- 用户先用 `cp -pnv` 备份 tasks/main.yml 到 `main.yml.before-http-check-20261009-193403`，再通过 vim 修改 HTTP 条件；`--syntax-check` 通过，sed 回读确认表达式是 `(site_resp.status | default(-1) | int) != 200 or site_name not in (site_resp.content | default(''))`。使用 or；不能改成默认 AND 语义的失败条件列表。
+- `http-condition-test.yml` 的五个假响应样本全部通过断言：200+正确正文不失败；200+错误正文、500+正确正文、缺少状态码、缺少正文都判失败。RECAP `ok=1 changed=0 unreachable=0 failed=0`。这只验证表达式，没有对真实站点造故障或触发 role 的 rescue。
+- 用户实际运行 `ansible-playbook deploy.yml`（没有 -i/-K）：localhost→8008、/var/www/ops-demo-localhost；centos100→8009、/var/www/ops-demo-centos100；两者各 HTTP 200、页面含 ops-demo。两个 PLAY 符合 serial:1，每个身份均 `ok=8 changed=0 unreachable=0 failed=0 skipped=0 rescued=0 ignored=0`，无 handler、无密码提示。
+- 边界：两个身份仍指向同一虚拟机；本轮未触发 reload 或 rescue，未隔离排除 sudo 缓存/免密对提权的影响。role 的“回滚”只是删除站点配置再 reload，不是恢复所有原始状态。
+- Ansible 主线及收尾完成，不再把三项收尾或部署复验列为待办。下一步阶段 6，先讲指标/日志/告警，再用 `free -h`、`df -h /`、`ss -lnt` 取今日基线；这三条尚待用户输出，监控组件尚未安装。备份、nolog-demo.yml 和 http-condition-test.yml 保留供复习；五份记录已更新，未提交或推送。
+
+## 2026-10-09 本地提交请求（权限阻塞，尚未完成）
+
+- 用户要求先提交本轮已讲解与验证的内容；范围是 README、Ansible 笔记及项目记录三份，共五个已修改文档，不包含真实凭据，不推送远端。
+- `git diff --check` 通过；实际 `git add` 因 `.git/index.lock: Permission denied` 失败，暂存区仍为空，未创建提交。权限申请工具返回环境标识错误，未取得额外写权限。需用户在 Windows 项目终端提交，或恢复当前仓库 .git 的写权限后继续；学习停点仍是阶段 6 的资源基线待回传。
