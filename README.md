@@ -23,7 +23,8 @@ new-chat/
 │   ├── ops_python_basics.md
 │   ├── ops_redis_basics.md
 │   ├── ops_docker_basics.md
-│   └── ops_ansible_basics.md
+│   ├── ops_ansible_basics.md
+│   └── ops_monitoring_basics.md
 ├── scripts/                  已纳入版本管理的运维脚本
 └── 项目记录/
     ├── memory.md
@@ -51,6 +52,7 @@ new-chat/
 - [Redis 基础运维](学习总结/ops_redis_basics.md)
 - [Docker 基础运维](学习总结/ops_docker_basics.md)
 - [Ansible 自动化部署](学习总结/ops_ansible_basics.md)
+- [监控、日志与告警](学习总结/ops_monitoring_basics.md)
 
 ### 项目记录
 
@@ -77,6 +79,8 @@ new-chat/
 ```
 
 ## 当前进度
+
+2026-10-10：进入阶段 6，资源和监听端口基线已由用户回传。内存约 1.9 GiB、available 约 1.2 GiB，Swap 2.0 GiB 当前未使用；根分区 17 GiB、已用 38%、可用约 11 GiB。8008/8009 和 6379 监听回环地址，3306/80/8080 存在通配监听；本次 TCP 列表未见 9100/9090/3000/9093。普通用户 `ss -lntp` 只显示了 8080 的 python 进程（PID 1219），不能据此认定其他端口没有进程。下一步只读核对内核/架构、glibc 及提权后的监听进程，再选兼容方案；尚未开展监控组件安装。上一轮 Ansible 记录已由用户提交并推送 `012a653`，不再处于提交阻塞状态。
 
 2026-10-09：Ansible 第十二节三个收尾项及完整部署复验均已通过。权限回读为目录/钥匙 700/600、配置/密文 664；`no_log` 假数据对照通过；当前 defaults 没有 `site_port: 9000`，inventory 显式指定 8008/8009。进一步修正 HTTP 自定义失败条件：状态码非 200 或正文缺少站点名即失败，并保护缺失字段。五种假响应断言全部通过；真实 `ansible-playbook deploy.yml` 不带 `-i/-K`，两个清单身份均 `ok=8 changed=0 unreachable=0 failed=0 rescued=0`，8008/8009 各 HTTP 200、正文包含 ops-demo；没有触发 handler 或 rescue。本轮是同一虚拟机的双身份验收，不是独立双机测试。Ansible 主线收尾，下一步进入阶段 6（监控、日志、告警与故障响应），先做资源和端口基线，不再重复收尾实验。
 

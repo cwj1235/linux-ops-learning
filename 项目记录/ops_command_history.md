@@ -5268,3 +5268,299 @@ localhost : ok=8 changed=0 unreachable=0 failed=0 skipped=0 rescued=0 ignored=0
 ```
 
 本轮幂等复验通过，未运行 handler、未进入 rescue；未主动制造 HTTP 500 或独立排除 sudo 缓存/免密规则。两个身份属于同一虚拟机。下一步阶段 6 的 `free -h`、`df -h /`、`ss -lnt` 尚未回传，不记为已执行。
+
+## 2026-10-09 Ansible 归档提交与推送（用户已完成）
+
+用户在 Windows PowerShell 暂存五份记录并执行：
+
+```powershell
+git commit -m "记录Ansible收尾、HTTP验收修正与完整部署复验"
+```
+
+结果为 `[main 012a653]`，5 files changed, 269 insertions(+), 10 deletions(-)。用户重复 add/commit 后提示 ahead of origin/main by 1 commit、nothing to commit, working tree clean，没有生成第二个提交。随后用户执行 `git push`，输出 `7127001..012a653 main -> main`，推送成功。代理设置不等于推送动作，成功依据是实际 push 输出。
+
+## 2026-10-10 监控阶段：资源与监听基线（用户已执行）
+
+```bash
+free -h
+free
+df -h /
+ss -lnt
+ss -lntp
+```
+
+内存快照：
+
+```text
+              total        used        free      shared  buff/cache   available
+Mem:           1.9G        627M        864M         12M        487M        1.2G
+Swap:          2.0G          0B        2.0G
+
+Mem:        2027896      643056      885432       12640      499408     1219968
+Swap:       2097148           0     2097148
+```
+
+第二组是默认 free 的 KiB 读数，两次命令是不同瞬间的快照，不要求取整后逐项完全相同。
+
+根分区：
+
+```text
+/dev/mapper/centos-root   17G  6.4G   11G   38% /
+```
+
+TCP 列表摘要：127.0.0.1:8008、8009、6379；*:3306、111、80、8080、22；192.168.122.1:53；127.0.0.1:631、25、6010；[::]:111、80、22；[::1]:631、25、6010。各 LISTEN 的 Recv-Q 当时为 0，不等于没有任何已建立连接。未出现 9100、9090、3000、9093。
+
+普通用户 ss -lntp 仅在 8080 显示 `users:(("python",pid=1219,fd=3))`；其他行没有进程字段。当前未提权核实，不把缺字段记成“端口没有进程”。
+
+未改变服务、端口、防火墙；监控组件未安装。
+
+## 2026-10-10 平台兼容性核对（用户已执行）
+
+```bash
+uname -mr
+ldd --version | head -n 1
+sudo ss -lntp
+```
+
+```text
+3.10.0-1160.el7.x86_64 x86_64
+ldd (GNU libc) 2.17
+```
+
+`sudo ss -lntp` 进程身份：8008/8009/80=nginx(pid 1312-1316, master+4 worker, fd=7/6/8)；3306=mysqld 1553；6379=redis-server 1212；8080=python 1219；192.168.122.1:53=dnsmasq 1743；22=sshd 1201；6010=会话级 sshd 2327；25=postfix master 1643；631=cupsd 1215；111=rpcbind 743。IPv6 各行为同服务 v6 监听，9100/9090/3000/9093 未出现。
+
+结论：x86_64 → linux-amd64；glibc 2.17 + 内核 3.10 → 不追最新版组件（新版 Go 构建产物要求内核≥3.17），下载后先 `./node_exporter --version` 验证再配置。
+
+## 2026-10-10 node_exporter 下载失败（cwd=/root）
+
+```text
+[atguigu@centos100 root]$ curl -LO https://github.com/prometheus/node_exporter/releases/download/v1.8.2/node_exporter-1.8.2.linux-amd64.tar.gz
+Warning: Failed to create the file node_exporter-1.8.2.linux-amd64.tar.gz:
+Warning: 权限不够
+curl: (23) Failed writing body (0 != 1371)
+
+[atguigu@centos100 root]$ pwd
+/root
+[atguigu@centos100 root]$ ls -ld .
+ls: 无法访问.: 权限不够
+[atguigu@centos100 root]$ whoami
+atguigu
+```
+
+根因：`su atguigu`（非登录式）保留了 root 的 cwd `/root`，atguigu 对 `/root`（700 root:root）无任何权限 → 创建文件 EACCES → curl error 23。curl 此前已收到响应头（总 10.1M），所以不是网络问题。修法：`su - atguigu`（带横线），或先 `cd` 到可写目录。
+
+修复与验证：
+
+```text
+[root@centos100 ~]# su - atguigu
+[atguigu@centos100 ~]$ pwd
+/home/atguigu
+[atguigu@centos100 ~]$ ls -ld .
+drwx------. 23 atguigu atguigu 4096 10月  9 19:38 .
+[atguigu@centos100 ~]$ whoami
+atguigu
+
+[atguigu@centos100 node_exporter-1.8.2.linux-amd64]$ ./node_exporter --version
+node_exporter, version 1.8.2 (branch: HEAD, revision: f1e0e8360aa60b6cb5e5cc1560bed348fc2c1895)
+  build user:       root@03d440803209
+  build date:       20240714-11:53:45
+  go version:       go1.22.5
+  platform:         linux/amd64
+  tags:             unknown
+```
+
+结论：提示符从 `root` 变 `~`、`pwd` 回到 `/home/atguigu`，cwd 问题解除；`--version` 可执行即证明 ELF/glibc/内核兼容性通过（Go 1.22.5 静态二进制，无需额外系统库）。下载产物在 `~/node_exporter-1.8.2.linux-amd64/`。
+
+## 2026-10-11 node_exporter systemd 托管完成
+
+```text
+[atguigu@centos100 system]$ systemctl status node_exporter
+● node_exporter.service - Node Exporter
+   Loaded: loaded (/etc/systemd/system/node_exporter.service; enabled; vendor preset: disabled)
+   Active: active (running) since 日 2026-10-11 15:04:49 CST; 1h 54min ago
+ Main PID: 2955 (node_exporter)
+    Tasks: 5
+   Memory: 3.9M
+   CGroup: /system.slice/node_exporter.service
+           └─2955 /usr/local/bin/node_exporter
+
+[atguigu@centos100 system]$ systemctl is-enabled node_exporter
+enabled
+
+[atguigu@centos100 system]$ sudo ss -lntp | grep 9100
+LISTEN     0      1024      [::]:9100                  [::]:*                   users:(("node_exporter",pid=2955,fd=3))
+
+[atguigu@centos100 system]$ curl -s http://127.0.0.1:9100/metrics | head -n 12
+# HELP go_gc_duration_seconds A summary of the pause duration of garbage collection cycles.
+# TYPE go_gc_duration_seconds summary
+go_gc_duration_seconds{quantile="0"} 2.1481e-05
+go_goroutines 7
+
+[atguigu@centos100 system]$ curl -s http://127.0.0.1:9100/metrics | grep -c '^node_'
+681
+```
+
+结论：unit `enabled` + `active (running)`，MainPID 2955 与 ss 中 pid 一致（证明是 unit 管的进程，不是手工后台残留）；监听 `[::]:9100`，因 `bindv6only=0` 同时接受 IPv4，故 `127.0.0.1` 可通；`node_*` 681 行；内存 3.9M。日志 `ts=` 为 UTC，与 journald 本地 CST 差 8 小时属正常。
+
+## 2026-10-13 Restart=on-failure 对照实验（唯一变量）
+
+先证明「无 Restart」的后果：
+
+```text
+[atguigu@centos100 ~]$ sudo kill -9 1219
+[atguigu@centos100 ~]$ sleep 3
+[atguigu@centos100 ~]$ systemctl status node_exporter
+   Active: failed (Result: signal) since 二 2026-10-13 19:41:07 CST; 22s ago
+  Process: 1219 ExecStart=/usr/local/bin/node_exporter (code=killed, signal=KILL)
+ Main PID: 1219 (code=killed, signal=KILL)
+10月 13 19:41:07 centos100 systemd[1]: node_exporter.service failed.
+[atguigu@centos100 ~]$ curl -sS http://127.0.0.1:9100/metrics
+curl: (7) Failed connect to 127.0.0.1:9100; 拒绝连接
+```
+
+再加 `Restart=on-failure` 并复现同一操作：
+
+```text
+[atguigu@centos100 ~]$ systemctl cat node_exporter
+[Service]
+User=node_exporter
+Group=node_exporter
+Type=simple
+Restart=on-failure
+ExecStart=/usr/local/bin/node_exporter
+
+[atguigu@centos100 ~]$ sudo systemctl daemon-reload
+[atguigu@centos100 ~]$ sudo systemctl start node_exporter
+[atguigu@centos100 ~]$ systemctl status node_exporter
+   Active: active (running) since 二 2026-10-13 19:53:44 CST; 19s ago
+ Main PID: 4887 (node_exporter)
+
+[atguigu@centos100 ~]$ sudo kill -9 4887
+[atguigu@centos100 ~]$ sleep 3
+[atguigu@centos100 ~]$ systemctl status node_exporter
+   Active: active (running) since 二 2026-10-13 19:54:59 CST; 25s ago
+ Main PID: 4912 (node_exporter)
+[atguigu@centos100 ~]$ curl -sS http://127.0.0.1:9100/metrics | grep -c '^node_'
+681
+```
+
+结论：唯一变量 `Restart=on-failure`；无它 `failed` + 端口不通，有它自动拉起、MainPID 4887→4912、采集恢复 681。主进程被杀属异常终止（signal=KILL），故 `on-failure` 会触发；`systemctl stop` 这种正常停止不会触发。
+
+兼容坑：`systemctl show -p MainPID --value node_exporter` 报 `systemctl：无法识别的选项「--value」`——`--value` 需 systemd 230，CentOS 7 是 219。用户改用 `systemctl show -p MainPID node_exporter` 得到 `MainPID=4887`；脚本可用 `systemctl show -p MainPID node_exporter | cut -d= -f2`。
+
+## 2026-10-14 fd 实测：空闲 vs 并发
+
+```text
+# 50 个 curl 并发抓取期间（作业号行已省略约 30 行）
+[atguigu@centos100 ~]$ for i in $(seq 50); do curl -s -o /dev/null http://127.0.0.1:9100/metrics & done
+[1] 2455
+...
+[50] 2504
+[atguigu@centos100 ~]$ sudo ls /proc/$pid/fd | wc -l
+24
+[atguigu@centos100 ~]$ wait
+...
+[atguigu@centos100 ~]$ sudo ls /proc/$pid/fd | wc -l
+7
+```
+
+结论：空闲 7 → 并发峰值 24 → 抓取结束回落 7。fd 随 HTTP 并发上升、用完即还，无泄漏；7 相对上限 1024 余量约 146 倍 → 不加 `LimitNOFILE`。
+未复核项：`$pid` 未单独打印核对（应用 `pgrep -a node_exporter` 交叉确认）。
+易误读点：`[1] 2455`…`[50] 2504` 是 bash 作业号 + curl 自身 PID，不是 node_exporter 的 fd。
+改进实验：`for i in $(seq 100); do (exec 3<>/dev/tcp/127.0.0.1/9100; sleep 5) & done` 可把 100 条连接按住不放，预期 fd≈107（已于 2026-10-14 执行，实测 107，见下一节）。
+
+## 2026-10-14 交叉复核：PID 三来源 + 静态链接
+
+```text
+[atguigu@centos100 ~]$ pid=$(systemctl show -p MainPID node_exporter | cut -d= -f2)
+[atguigu@centos100 ~]$ echo $pid
+1220
+[atguigu@centos100 ~]$ pgrep -a node_exporter
+1220 /usr/local/bin/node_exporter
+[atguigu@centos100 ~]$ ps -o user,pid,cmd -C node_exporter
+USER        PID CMD
+node_ex+   1220 /usr/local/bin/node_exporter
+[atguigu@centos100 ~]$ ldd /usr/local/bin/node_exporter
+	不是动态可执行文件
+[atguigu@centos100 ~]$ file /usr/local/bin/node_exporter
+/usr/local/bin/node_exporter: ELF 64-bit LSB executable, x86-64, version 1 (SYSV), statically linked, not stripped
+[atguigu@centos100 ~]$ readelf -d /usr/local/bin/node_exporter | head
+There is no dynamic section in this file.
+```
+
+结论：三来源 PID 一致（1220），此前 fd 测量对象确认无误；USER 列 `node_ex+` 是 procps 默认 8 字符截断加 `+` 标记，用 `ps -o user:16` 可看全名。`ldd`/`file`/`readelf -d` 三重证据确认静态链接、无动态依赖，glibc 兼容属「绕过」而非「通过」。PID 由 4912 变 1220 且号很小，提示期间可能重启过机器（可用 `uptime` 区分）。
+
+## 2026-10-14 /dev/tcp 并发对照实验（fd 精确模型）
+
+```text
+[atguigu@centos100 ~]$ sudo ls /proc/$pid/fd | wc -l
+7
+[atguigu@centos100 ~]$ set +m
+[atguigu@centos100 ~]$ for i in $(seq 100); do (exec 3<>/dev/tcp/127.0.0.1/9100; sleep 5) & done
+[1] 6814
+...
+[100] 6996
+[atguigu@centos100 ~]$ sleep 1
+[atguigu@centos100 ~]$ sudo ls /proc/$pid/fd | wc -l
+107
+[atguigu@centos100 ~]$ wait
+[atguigu@centos100 ~]$ set -m
+[atguigu@centos100 ~]$ sudo ls /proc/$pid/fd | wc -l
+7
+```
+
+结论：基线 7 → 100 条按住连接期间 107（= 7 + 100，与预测完全吻合）→ 连接关闭后回落 7。得出精确模型：node_exporter 的 fd = 常驻 7 个 + 每条活跃连接 1 个，无隐藏开销。上限 1024 需同时 1000+ 并发连接才可能触及，单机场景基本不会出现 → 不加 `LimitNOFILE` 有了量化依据。
+附带确认：只建连接不发请求，服务端等足 5 秒未主动断开，说明 `--web.read-timeout`（默认 5 分钟）未在 5 秒内介入。
+自身判断失误：预测 `set +m` 能屏蔽 `[1] 6814`…`[100] 6996` 提示，实测仍全部打印；但 `wait` 之后没有 curl 实验那种「完成」洪流，说明 `set +m` 确实生效——它管作业结束时的通知，管不了创建时那行。
+
+## 2026-10-15 Prometheus 解压失败（归档截断）
+
+```text
+[atguigu@centos100 ~]$ tar -xzf prometheus-2.53.0.linux-amd64.tar.gz
+
+gzip: stdin: unexpected end of file
+tar: 归档文件中异常的 EOF
+tar: 归档文件中异常的 EOF
+tar: Error is not recoverable: exiting now
+```
+
+结论：不是 tar 用法问题，是 tar.gz 本身被截断。curl 进度截图显示只下到 30.5M / 99.3M（约 30%）就中断了。GNU tar 读到 gzip 流结尾应存在的 8 字节（CRC32 + ISIZE）却读到 EOF，于是 gzip 先报 `unexpected end of file`，tar 再报 `异常的 EOF`。下一步用 `curl -LO -C -` 断点续传，再用 sha256 校验，最后才解压。
+## 2026-10-15 Prometheus 续传中途被掐 curl (18)
+
+```text
+curl: (18) transfer closed with 30791745 bytes remaining to read
+[atguigu@centos100 ~]$ ls -lh prometheus-2.53.0.linux-amd64.tar.gz
+-rw-rw-r--. 1 atguigu atguigu 70M 10月 15 20:40 prometheus-2.53.0.linux-amd64.tar.gz
+```
+
+（随后又对不完整文件执行了两次 `tar -xzf`，报错与被截断时完全相同）
+
+结论：`-C -` 断点续传有效（30.5M → 70M），但链路中途被掐断。用「已收字节 + curl 报的剩余字节」可反推总大小 ≈ 104,192,065 字节，与最初 `Total 99.3M` 吻合，可用于判断是否下完。文件不完整时 tar 跑多少次都是同一个错。
+## 2026-10-15 Prometheus 2.53.0 下载完成、解压成功、版本验证通过
+
+```text
+[atguigu@centos100 ~]$ stat -c %s prometheus-2.53.0.linux-amd64.tar.gz
+104192065
+[atguigu@centos100 ~]$ tar -xzf prometheus-2.53.0.linux-amd64.tar.gz && echo EXTRACT_OK
+EXTRACT_OK
+[atguigu@centos100 ~]$ cd prometheus-2.53.0.linux-amd64 && ls -l
+总用量 261312
+drwxr-xr-x. 2 atguigu atguigu        38 6月  19 2024 console_libraries
+drwxr-xr-x. 2 atguigu atguigu       173 6月  19 2024 consoles
+-rw-r--r--. 1 atguigu atguigu     11357 6月  19 2024 LICENSE
+-rw-r--r--. 1 atguigu atguigu      3773 6月  19 2024 NOTICE
+-rwxr-xr-x. 1 atguigu atguigu 137821861 6月  19 2024 prometheus
+-rw-r--r--. 1 atguigu atguigu       934 6月  19 2024 prometheus.yml
+-rwxr-xr-x. 1 atguigu atguigu 129737825 6月  19 2024 promtool
+[atguigu@centos100 prometheus-2.53.0.linux-amd64]$ ./prometheus --version
+prometheus, version 2.53.0 (branch: HEAD, revision: 4c35b9250afefede41c5f5acd76191f90f625898)
+  build user:       root@7f8d89cbbd64
+  build date:       20240619-07:39:12
+  go version:       go1.22.4
+  platform:         linux/amd64
+  tags:             netgo,builtinassets,stringlabels
+[atguigu@centos100 prometheus-2.53.0.linux-amd64]$ ./promtool --version
+promtool, version 2.53.0 (branch: HEAD, revision: 4c35b9250afefede41c5f5acd76191f90f625898)
+```
+
+结论：续传补齐到 104192065 字节（与「70M + 剩余 30791745」推算值精确吻合），tar 成功说明 gzip 尾部 CRC32/ISIZE 校验通过。go1.22.4、linux/amd64、tags 含 netgo → 不依赖 glibc 的 DNS 解析，CentOS 7 + glibc 2.17 + 内核 3.10 环境匹配。promtool 与 prometheus revision 相同，可用来校验配置。
