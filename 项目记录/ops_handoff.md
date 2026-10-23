@@ -1939,3 +1939,21 @@ Linux 运维强化基础检查已经完成。下一步可先做一次阶段复�
 - 已处置：从 `012a653` 用 `git cat-file blob` 恢复（`.git` 对助手只读，`git checkout --` 建不了 `index.lock`），再按回传证据重建 10-10 之后的记录；重建内容非逐字复制。
 - 现场线索：同目录同时出现无关改动（`pelican-motorcycle.html` 未跟踪、`scripts/args_demo.py`、`学习总结/ops_mysql_basics.md` 被修改），`项目记录/` 下所有文件时间戳都是 `13:03:49` → 高度怀疑有另一个会话/程序在同一目录写入。
 - 教训：**提交前必须 `git status --short` 逐条确认**，出现 `D`（尤其整文件删除）先停下查原因；`git add` 显式列路径，`git commit` 前看一眼 stat 的删除行数。
+
+## 2026-10-23 Prometheus 系统化安装完成（9090 已监听，仅自监控 1 个 UP）
+
+- 已完成（每步都有用户回传输出）：默认配置 `./promtool check config prometheus.yml` → `SUCCESS`；建 `prometheus` 系统账号（`uid=985 gid=978`）；建三目录；文件落地与分权；写 unit + `daemon-reload` + `enable --now`；四项验证（ss / healthy / targets / 数据目录）。
+- 环境终态：`active (running)`、MainPID 6471、`enabled`、`Memory 18.1M`、`Tasks: 9`；`[::]:9090` 监听（`fd=7`，**无认证**）；`/var/lib/prometheus` 已有 `chunks_head/`、`lock`(0)、`queries.active`(20001)、`wal/`；`/usr/local/prometheus` 与 `/etc/prometheus` 属主 root 644/755，仅数据目录属 prometheus。
+- unit：`/etc/systemd/system/prometheus.service`，`Type=simple`、`User/Group=prometheus`、`WorkingDirectory=/usr/local/prometheus`、ExecStart 四个路径参数全绝对、`Restart=on-failure`+`RestartSec=5`。写入用 `sudo tee ... <<'EOF'`。
+- 判读要点：`Tasks` 是线程数不是进程数；`vendor preset: disabled` 是出厂默认；`ss` 需 `sudo` 才看得到 pid；`[::]` 通配 + `bindv6only=0` 同时收 IPv4；`queries.active` 20001 = 1 + 20×1000，对应默认 `--query.max-concurrency=20`；`lock` 是单实例锁；`wal` 是预写日志、`chunks_head` 是内存块。
+- **未完成**：追加 `job_name: "node_exporter"`（`127.0.0.1:9100`）的命令已下发，用户**尚未执行/回传**；改配置前的带时间戳备份是否执行也未回传。因此 9090 上**只有 prometheus 自监控 1 个目标 UP**，不能称 node_exporter 已被抓取。
+- 已知限制：无 `--web.enable-lifecycle` → `POST /-/reload` 返回 403，改配置只能 `systemctl restart`；`LimitNOFILE` 未设；9090 无认证且监听全部网卡，机器必须隔离；Grafana、Alertmanager、告警规则、`/targets` 网页验收都未开始。
+- 文档：`学习总结/ops_monitoring_basics.md` 新增第六节（默认配置体检、目录三分法、unit 逐行、四项验证、三个细节、安全与后续），并已回填 5.5 的体检结果。
+
+## 当前下一步（最新）
+
+1. 执行并回传：`sudo cp` 备份 → `sudo tee -a` 追加 node_exporter job（末尾追加、`-` 前 2 空格对齐）→ `sudo /usr/local/prometheus/promtool check config /etc/prometheus/prometheus.yml`，**必须 SUCCESS 才继续**。
+2. 然后 `sudo systemctl restart prometheus` + `journalctl -u prometheus -l -n 25 --no-pager`，看 `Loading WAL`/`Replaying WAL`（重启不丢数据的证据）与 `Server is ready to receive web requests.`，且不得出现 `Error loading config`。
+3. 再用 `curl -s '127.0.0.1:9090/api/v1/query?query=up'` 确认两条 `up=1`（`job="prometheus"`、`job="node_exporter"`）——这是第一条 PromQL。
+4. 之后：Grafana（3000 未占用）→ Alertmanager/告警规则（9093）→ 故障演练（停 node_exporter 看 `up` 变 0、观察 `for` 抑制）。
+5. 不要重做本节已完成动作（建账号、建目录、拷文件、写 unit、四次验证）；重复执行前先读本节终态。

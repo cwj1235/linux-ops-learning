@@ -480,7 +480,7 @@ prometheus, version 2.53.0 (branch: HEAD, revision: 4c35b9250afefede41c5f5acd761
 
 `promtool` 的 `revision` 与 `prometheus` 完全相同 → 同一次构建产物，用它校验配置不会出现版本不匹配的问题。
 
-### 5.5 下一步：默认配置与体检
+### 5.5 默认配置与体检（2026-10-23 已完成，结果见第六节 6.1）
 
 ```bash
 cd ~/prometheus-2.53.0.linux-amd64
@@ -490,4 +490,147 @@ cat prometheus.yml
 
 - 期望默认配置里 `global` 有 `scrape_interval: 15s`、`evaluation_interval: 15s`，`scrape_configs` 有一个 `job_name: "prometheus"` 抓 `localhost:9090`（**还没装完时它抓的是自己**，这是自监控）。
 - `promtool check config` 相当于 `nginx -t`：只查语法和语义，不启动服务。成功输出 `SUCCESS: prometheus.yml is valid prometheus config file syntax`。
+
+## 六、Prometheus 系统化安装与 systemd 托管（2026-10-23 完成）
+
+### 6.1 默认配置体检结果
+
+```bash
+cd ~/prometheus-2.53.0.linux-amd64
+./promtool check config prometheus.yml
+```
+
+输出 `Checking prometheus.yml` + `SUCCESS: prometheus.yml is valid prometheus config file syntax`。
+
+回传文本里 `global` 下面两行看着"没了缩进"，那是粘贴丢空格，不是文件坏了。**反证**：Prometheus 用严格 YAML 解码，若 `scrape_interval` 真顶格，它就变成顶层未知字段，`promtool` 必报 `field scrape_interval not found in type config.plain`，不可能给 SUCCESS。想眼见为实用：
+
+```bash
+sed -n '1,10p' prometheus.yml | cat -A
+```
+
+`cat -A` 把空格显示成可见字符、行尾显示成 `$`。**YAML 里缩进不是排版，是语法**——两个空格代表"属于上一级"。
+
+默认配置四块：
+
+| 块 | 内容 | 含义 |
+|---|---|---|
+| `global` | `scrape_interval: 15s`、`evaluation_interval: 15s` | 抓取周期、规则评估周期；注释说默认各 1 分钟，这里显式改成 15s |
+| | `# scrape_timeout` 被注释 | 注释写明"跟随全局默认 10s"。**超时必须小于抓取间隔**，否则上轮没抓完下轮又来 |
+| `alerting` | `alertmanagers: - static_configs: - targets:` | 结构在，`targets` 下只有一个被注释掉的 `alertmanager:9093` → 空列表，**当前没有告警接收方** |
+| `rule_files` | 只有两行注释 | 一条规则都没加载 |
+| `scrape_configs` | `job_name: "prometheus"` → `targets: ["localhost:9090"]` | 唯一在干活的块：抓自己，即**自监控** |
+
+- `job_name` 会成为该任务所有数据的 `job="..."` 标签，所以后面加任务时起名 `node_exporter`，就能用 `job="node_exporter"` 精确筛选。
+- `metrics_path` 默认 `/metrics`、`scheme` 默认 `http`（都在注释里写明），node_exporter 正好符合默认值，不用改。
+
+### 6.2 目录三分法与账号
+
+| 目录 | 属主 | 放什么 | 为什么 |
+|---|---|---|---|
+| `/usr/local/prometheus` | root | 二进制 + `consoles/` + `console_libraries/` | 服务只读、只执行，**改不了自己的二进制** |
+| `/etc/prometheus` | root | `prometheus.yml` | 服务只读配置。能改自己配置的服务 = 被拿下就有持久化后门 |
+| `/var/lib/prometheus` | prometheus | TSDB（`wal/`、`chunks_head/`） | 唯一必须写的地方 |
+
+```bash
+sudo useradd --system --no-create-home --shell /bin/false prometheus
+sudo mkdir -p /usr/local/prometheus /etc/prometheus /var/lib/prometheus
+sudo cp prometheus promtool /usr/local/prometheus/
+sudo cp -r consoles console_libraries /usr/local/prometheus/
+sudo cp prometheus.yml /etc/prometheus/prometheus.yml
+sudo chown -R prometheus:prometheus /var/lib/prometheus
+```
+
+- `--system` → `uid=985 gid=978`，落在系统账号区间（201–999；普通用户从 1000 起）。
+- `--shell /bin/false` → 登不进去。服务账号的原则是**能跑服务、不能登录**。
+- `--no-create-home` → 不建家目录，"家"由 unit 的 `WorkingDirectory` 指定。
+- 三目录 `ls -ld` 显示大小 `6`，是 **xfs 空目录特征**（ext4 才显示 4096），不是没建成功。
+- `cp` 保留执行位 → `-rwxr-xr-x root root`。只 chown 数据目录，程序与配置**故意留 root**。这与 MySQL 那节「服务账号不该有 DBA 权限」是同一条最小权限原则在文件系统层的等价形式：多给的权限就是未来的漏洞入口。
+
+### 6.3 unit 文件与逐行职责
+
+```ini
+[Unit]
+Description=Prometheus Monitoring System
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=prometheus
+Group=prometheus
+WorkingDirectory=/usr/local/prometheus
+ExecStart=/usr/local/prometheus/prometheus --config.file=/etc/prometheus/prometheus.yml --storage.tsdb.path=/var/lib/prometheus/ --web.console.templates=/usr/local/prometheus/consoles --web.console.libraries=/usr/local/prometheus/console_libraries
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+
+| 行 | 作用 |
+|---|---|
+| `After=` / `Wants=network-online.target` | `After` 只管启动顺序，`Wants` 才把依赖拉起来，**两个都要** |
+| `Type=simple` | `ExecStart` 起的进程本身就是主进程，systemd 直接盯，不需要 fork |
+| `User=` / `Group=` | 以 prometheus 身份跑 → 前面那套文件权限才真正生效 |
+| `WorkingDirectory=` | **相对路径的基准**。`--web.console.templates` 默认相对 `./consoles`，靠它才不会找错；本例同时写了绝对路径，双保险 |
+| `Restart=on-failure` + `RestartSec=5` | 自愈；`RestartSec` 防"秒崩—重启"打满 CPU |
+| `WantedBy=multi-user.target` | `enable` 时据此建开机软链接 |
+
+写入手法（单引号 heredoc 防 shell 替换，保证文件里的 `$` 不被吃掉）：
+
+```bash
+sudo tee /etc/systemd/system/prometheus.service > /dev/null <<'EOF'
+...（内容同上）
+EOF
+```
+
+`ExecStart` 特意写成一整行、不用 `\` 续行：续行是合法语法，但粘贴时最容易坏。文件属主保持 root、644——**它改不了自己的启动参数**。
+
+### 6.4 启动与四项验证（全部实测）
+
+```bash
+systemctl cat prometheus                          # 先看 systemd 读到的内容对不对
+sudo systemctl daemon-reload                      # 新增/改 unit 后必做
+sudo systemctl enable --now prometheus
+systemctl status prometheus --no-pager
+sudo ss -lntp | grep 9090
+curl -s 127.0.0.1:9090/-/healthy; echo
+curl -s 127.0.0.1:9090/api/v1/targets | grep -o '"health":"[a-z]*"'
+sudo ls -l /var/lib/prometheus
+```
+
+实测结果：
+
+| 项 | 实际输出 | 判读 |
+|---|---|---|
+| status | `active (running)`、MainPID 6471、`Tasks: 9`、`Memory: 18.1M`、`enabled` | `Tasks` 是**线程数**（Go 调度 + GC），进程只有 1 个；`vendor preset: disabled` 是 CentOS 出厂默认，自启是我们开的 |
+| ss | `LISTEN 0 1024 [::]:9090 users:(("prometheus",pid=6471,fd=7))` | 非 root 跑 `ss -lntp` 进程列为空，**不是没监听，是权限不足看不到** |
+| healthy | `Prometheus Server is Healthy.` | 存活探针。`/-/ready` 含义不同：还要求 TSDB 加载完、能接查询。生产上分别对应 liveness / readiness |
+| targets | `"health":"up"` | 抓取成功的机器可读证据；失败看同份 JSON 的 `lastError`。脚本巡检优先用它 |
+| 数据目录 | `chunks_head/`、`lock`(0)、`queries.active`(20001)、`wal/` | TSDB 落地：从"内存里一个数"变成"磁盘上有块目录" |
+
+### 6.5 三个能直接记住的细节
+
+1. **`fd=7`** 与 node_exporter 实测的「常驻 7 + 并发连接数」模型一致 → Go 服务基础 fd 占用同构（stdin/out/err、epoll、信号管道、监听 socket 等）。两个独立程序对上同一个数，说明模型可靠。
+2. **`queries.active` 20001 字节** = 1 字节文件头 + 20 槽 × 1000 字节，正好对应默认 `--query.max-concurrency=20`（槽里存正在跑的查询语句，最长 1000 字节）。**一个文件大小把启动参数暴露了**。
+3. **`lock`（0 字节）是单实例锁**：第二个 Prometheus 打开同一数据目录会直接报错退出，防止两个进程同时写坏 TSDB。
+
+存储机制串起来：
+
+```text
+抓取 → wal/（预写日志，追加写，崩溃不丢最近数据）
+     → chunks_head/（内存块，攒约 2 小时）
+     → 01BK.../ 块目录（压缩落盘，默认保留 15 天，到期整块删除）
+```
+
+### 6.6 安全边界与后续
+
+- 监听 `[::]:9090` = **所有网卡**，且**无任何认证**（无 basic auth、无 TLS、无反向代理）。这台机器必须保持隔离；要收敛就加 `--web.listen-address=127.0.0.1:9090`（和 node_exporter 那条"未做（可选）：监听地址收敛"同一件事）。
+- 未设 `LimitNOFILE`：现在 2 个目标远够；目标上百才是问题，与 fd 模型同源。
+- 未加 `--web.enable-lifecycle`：所以 `curl -X POST 127.0.0.1:9090/-/reload` 会被拒（403）。改配置只有两条路——`systemctl restart`（简单，有短暂中断），或加该参数后用 `/-/reload`（热加载，但这个端点会变成任何人都能触发）。
+- 未做：Grafana（3000）、Alertmanager（9093）、告警规则、`/targets` 网页验收。
+
+### 6.7 下一步
+
+把 `127.0.0.1:9100` 加为第二个 job：末尾追加、`-` 前 2 空格对齐 `scrape_configs` 列表，`promtool check config` 通过后再重启，最后用 `up` 指标确认两个目标都 UP。
 - 之后的目录规划（**尚未执行**）：程序 `/usr/local/prometheus/`、配置 `/etc/prometheus/prometheus.yml`、数据 `/var/lib/prometheus/`、账号 `prometheus`；unit 里必须有 `WorkingDirectory=` 或把 `--web.console.templates` / `--web.console.libraries` 写成绝对路径。

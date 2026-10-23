@@ -5564,3 +5564,97 @@ promtool, version 2.53.0 (branch: HEAD, revision: 4c35b9250afefede41c5f5acd76191
 ```
 
 结论：续传补齐到 104192065 字节（与「70M + 剩余 30791745」推算值精确吻合），tar 成功说明 gzip 尾部 CRC32/ISIZE 校验通过。go1.22.4、linux/amd64、tags 含 netgo → 不依赖 glibc 的 DNS 解析，CentOS 7 + glibc 2.17 + 内核 3.10 环境匹配。promtool 与 prometheus revision 相同，可用来校验配置。
+
+## 2026-10-23 Prometheus 默认配置体检（用户已执行）
+
+```text
+[atguigu@centos100 prometheus-2.53.0.linux-amd64]$ cd ~/prometheus-2.53.0.linux-amd64
+[atguigu@centos100 prometheus-2.53.0.linux-amd64]$ ls -lh
+总用量 256M
+drwxr-xr-x. 2 atguigu atguigu   38 6月  19 2024 console_libraries
+drwxr-xr-x. 2 atguigu atguigu  173 6月  19 2024 consoles
+-rw-r--r--. 1 atguigu atguigu  12K 6月  19 2024 LICENSE
+-rw-r--r--. 1 atguigu atguigu 3.7K 6月  19 2024 NOTICE
+-rwxr-xr-x. 1 atguigu atguigu 132M 6月  19 2024 prometheus
+-rw-r--r--. 1 atguigu atguigu  934 6月  19 2024 prometheus.yml
+-rwxr-xr-x. 1 atguigu atguigu 124M 6月  19 2024 promtool
+[atguigu@centos100 prometheus-2.53.0.linux-amd64]$ ./promtool check config prometheus.yml
+Checking prometheus.yml
+SUCCESS: prometheus.yml is valid prometheus config file syntax
+```
+
+- `cat prometheus.yml` 的实际内容为默认四块：`global`（`scrape_interval: 15s`、`evaluation_interval: 15s`、`scrape_timeout` 仅在注释中说明默认 10s）、`alerting`（`targets` 下只有注释 → 空列表）、`rule_files`（只有注释 → 无规则）、`scrape_configs`（`job_name: "prometheus"` 抓 `localhost:9090`，即自监控）。
+- 回传文本中 `global` 下两行的缩进丢失，属粘贴问题：Prometheus 用严格 YAML 解码，若 `scrape_interval` 真顶格会报 `field scrape_interval not found in type config.plain`，因此 `SUCCESS` 本身已反证文件缩进正常。核对手法 `sed -n '1,10p' prometheus.yml | cat -A`。
+
+## 2026-10-23 Prometheus 账号与目录创建（用户已执行）
+
+```text
+[atguigu@centos100 prometheus-2.53.0.linux-amd64]$ sudo useradd --system --no-create-home --shell /bin/false prometheus
+[sudo] atguigu 的密码：
+[atguigu@centos100 prometheus-2.53.0.linux-amd64]$ sudo mkdir -p /usr/local/prometheus /etc/prometheus /var/lib/prometheus
+[atguigu@centos100 prometheus-2.53.0.linux-amd64]$ id prometheus
+uid=985(prometheus) gid=978(prometheus) 组=978(prometheus)
+[atguigu@centos100 prometheus-2.53.0.linux-amd64]$ ls -ld /usr/local/prometheus /etc/prometheus /var/lib/prometheus
+drwxr-xr-x. 2 root root 6 10月 23 12:22 /etc/prometheus
+drwxr-xr-x. 2 root root 6 10月 23 12:22 /usr/local/prometheus
+drwxr-xr-x. 2 root root 6 10月 23 12:22 /var/lib/prometheus
+```
+
+结论：`uid=985`/`gid=978` 落在 CentOS 7 系统账号区间（201–999），证明 `--system` 生效。目录显示大小 `6` 是 **xfs 空目录特征**（ext4 显示 4096），不是创建失败。
+
+## 2026-10-23 Prometheus 文件落地与分权（用户已执行）
+
+```text
+[atguigu@centos100 prometheus-2.53.0.linux-amd64]$ ls -l /usr/local/prometheus; ls -l /etc/prometheus; ls -ld /var/lib/prometheus
+总用量 261292
+drwxr-xr-x. 2 root root        38 10月 23 16:53 console_libraries
+drwxr-xr-x. 2 root root       173 10月 23 16:53 consoles
+-rwxr-xr-x. 1 root root 137821861 10月 23 16:53 prometheus
+-rwxr-xr-x. 1 root root 129737825 10月 23 16:53 promtool
+总用量 4
+-rw-r--r--. 1 root root 934 10月 23 16:53 prometheus.yml
+drwxr-xr-x. 2 prometheus prometheus 6 10月 23 12:22 /var/lib/prometheus
+```
+
+结论：`cp` 保留执行位（`-rwxr-xr-x root root`）；配置为 `-rw-r--r-- root root`；只有数据目录改为 `prometheus:prometheus`。程序与配置故意留 root —— 服务改不了自己的二进制与启动参数，与「服务账号不该有 DBA 权限」同一条最小权限原则。`总用量 4` 是 934 字节文件占一个块。
+
+## 2026-10-23 Prometheus systemd 托管并启动（用户已执行）
+
+```text
+[atguigu@centos100 prometheus-2.53.0.linux-amd64]$ systemctl status prometheus --no-pager
+● prometheus.service - Prometheus Monitoring System
+Loaded: loaded (/etc/systemd/system/prometheus.service; enabled; vendor preset: disabled)
+Active: active (running) since 五 2026-10-23 17:54:53 CST; 28s ago
+Main PID: 6471 (prometheus)
+Tasks: 9
+Memory: 18.1M
+CGroup: /system.slice/prometheus.service
+└─6471 /usr/local/prometheus/prometheus --config.fil...
+```
+
+结论：`enabled` 由 `enable --now` 建立；`vendor preset: disabled` 是 CentOS 出厂默认。`Tasks: 9` 是**线程数**（Go 运行时调度 + GC），进程仍只有 1 个。日志 `ts=2026-10-23T09:...` 为 UTC，与本地 CST 差 8 小时。`Hint: ... ellipsized` 提示可用 `journalctl -u prometheus -l` 展开。
+
+## 2026-10-23 Prometheus 四项验证全部通过（用户已执行）
+
+```text
+[atguigu@centos100 prometheus-2.53.0.linux-amd64]$ sudo ss -lntp |grep 9090
+LISTEN     0      1024      [::]:9090                  [::]:*                   users:(("prometheus",pid=6471,fd=7))
+[atguigu@centos100 prometheus-2.53.0.linux-amd64]$ sudo ls -l /var/lib/prometheus
+总用量 4
+drwxr-xr-x. 2 prometheus prometheus    20 10月 23 18:00 chunks_head
+-rw-r--r--. 1 prometheus prometheus     0 10月 23 17:54 lock
+-rw-r--r--. 1 prometheus prometheus 20001 10月 23 17:54 queries.active
+drwxr-xr-x. 2 prometheus prometheus    22 10月 23 17:54 wal
+[atguigu@centos100 prometheus-2.53.0.linux-amd64]$ curl -s 127.0.0.1:9090/-/healthy; echo
+Prometheus Server is Healthy.
+[atguigu@centos100 prometheus-2.53.0.linux-amd64]$ curl -s 127.0.0.1:9090/api/v1/targets | grep -o '"health":"[a-z]*"'
+"health":"up"
+```
+
+结论与判读：
+
+- `fd=7` 与 node_exporter 实测的「常驻 7 + 并发连接数」模型一致 → Go 服务基础 fd 占用同构。
+- `[::]:9090` 是 IPv6 通配，`net.ipv6.bindv6only=0` 时同时接受 IPv4（所以 `curl 127.0.0.1:9090` 通），且监听**所有网卡**、当前**无认证**。`ss` 必须 `sudo`，非 root 只显示 `LISTEN ... :::9090` 而进程列为空。
+- `queries.active` 20001 = 1 字节文件头 + 20 槽 × 1000 字节，对应默认 `--query.max-concurrency=20`；`lock`(0 字节) 是单实例锁，第二个进程打开同一数据目录会直接失败。
+- `wal/` 22 字节、`chunks_head/` 18:00 更新，说明启动后持续在写；`wal` 是预写日志，`chunks_head` 是内存块，攒约 2 小时压缩成 `01BK...` 块目录，默认保留 15 天。
+- `"health":"up"` 只覆盖 prometheus 自监控这一个目标；node_exporter 尚未加入 `scrape_configs`，本轮**不能说它已被抓取**。
