@@ -27,3 +27,7 @@ __pycache__/
 # Codex 本地隐藏运行目录
 .codex/
 .agents/
+
+# 本地工具会话目录
+.workbuddy/
+.workbuddy-ai/

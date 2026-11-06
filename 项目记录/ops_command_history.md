@@ -5658,3 +5658,172 @@ Prometheus Server is Healthy.
 - `queries.active` 20001 = 1 字节文件头 + 20 槽 × 1000 字节，对应默认 `--query.max-concurrency=20`；`lock`(0 字节) 是单实例锁，第二个进程打开同一数据目录会直接失败。
 - `wal/` 22 字节、`chunks_head/` 18:00 更新，说明启动后持续在写；`wal` 是预写日志，`chunks_head` 是内存块，攒约 2 小时压缩成 `01BK...` 块目录，默认保留 15 天。
 - `"health":"up"` 只覆盖 prometheus 自监控这一个目标；node_exporter 尚未加入 `scrape_configs`，本轮**不能说它已被抓取**。
+
+## 2026-10-24 追加 node_exporter 抓取任务并验收（用户已执行）
+
+```text
+[atguigu@centos100 etc]$ sudo /usr/local/prometheus/promtool check config /etc/prometheus/prometheus.yml
+Checking /etc/prometheus/prometheus.yml
+ SUCCESS: /etc/prometheus/prometheus.yml is valid prometheus config file syntax
+
+[atguigu@centos100 etc]$ sudo systemctl restart prometheus
+[atguigu@centos100 etc]$ journalctl -u prometheus -l -n 25 --no-pager
+10月 24 15:41:28 centos100 prometheus[3917]: ... msg="Start listening for connections" address=0.0.0.0:9090
+10月 24 15:41:28 centos100 prometheus[3917]: ... msg="Found healthy block" mint=1792756800000 maxt=1792764000000 ulid=01M5P612XYVJKT1VEAWPB7KEXV
+10月 24 15:41:28 centos100 prometheus[3917]: ... msg="Found healthy block" mint=1792764008956 maxt=1792771200000 ulid=01M5P612Z5VWRVESKRBJE9966Y
+10月 24 15:41:28 centos100 prometheus[3917]: ... msg="Found healthy block" mint=1792749308956 maxt=1792756800000 ulid=01M5P6131NQYBNQJCB11DESMKS
+10月 24 15:41:28 centos100 prometheus[3917]: ... msg="Found healthy block" mint=1792816028958 maxt=1792821600000 ulid=01M5PCWT53GYFV286H6B798PK8
+10月 24 15:41:28 centos100 prometheus[3917]: ... msg="WAL replay completed" checkpoint_replay_duration=6.037949ms wal_replay_duration=274.996869ms total_replay_duration=281.801809ms
+10月 24 15:41:28 centos100 prometheus[3917]: ... msg="TSDB started"
+10月 24 15:41:28 centos100 prometheus[3917]: ... msg="Loading configuration file" filename=/etc/prometheus/prometheus.yml
+10月 24 15:41:28 centos100 prometheus[3917]: ... msg="updated GOGC" old=100 new=75
+10月 24 15:41:28 centos100 prometheus[3917]: ... msg="Completed loading of configuration file" ... scrape=1.814627ms
+10月 24 15:41:28 centos100 prometheus[3917]: ... msg="Server is ready to receive web requests."
+
+[atguigu@centos100 etc]$ curl -s '127.0.0.1:9090/api/v1/query?query=up'
+{"status":"success","data":{"resultType":"vector","result":[
+ {"metric":{"__name__":"up","instance":"localhost:9090","job":"prometheus"},"value":[1792827833.710,"1"]},
+ {"metric":{"__name__":"up","instance":"127.0.0.1:9100","job":"node_exporter"},"value":[1792827833.710,"1"]}]}}
+```
+
+结论与判读：
+
+- 配置语法 `SUCCESS`；重启后无 `Error loading config`，有 `WAL replay completed` 与 `Server is ready to receive web requests.` → 抓取任务已生效，**node_exporter 已被 Prometheus 抓取**。
+- 两条序列的 `value` 都是 `"1"`：`up` 是每次抓取生成的合成指标（1 成功 / 0 失败），`job` 来自 `job_name`，`instance` 来自 `targets` 里的地址字面值。查询时间戳 `1792827833.710` = 2026-10-24 15:43:53 CST。
+- 4 条 `Found healthy block` 的 `maxt - mint` 均为 7200000 ms = 2 小时，实测印证 `chunks_head` 攒约 2 小时压缩成块目录。WAL 回放 281.8ms 说明重启后历史数据完整加载。
+- MainPID `6471 → 3917`：`systemctl restart` 是 stop+start，必然换 PID，日志 `prometheus[3917]` 与之一致，不是异常。
+- 块覆盖 10-23 17:55→10-24 00:00，随后跳到 12:27→14:00；今日 journal 从 13:26:28 开始 → 中间虚拟机未运行，Prometheus 不回填停机数据。
+- `updated GOGC old=100 new=75` 为 2.53 启动时按自身策略调整 GC 目标，非配置错误；`fs_type=XFS_SUPER_MAGIC` 与早前「空目录显示 size 6」同源。
+
+## 2026-10-27 数据面三层验收（用户已执行，全部通过）
+
+```text
+[atguigu@centos100 ~]$ curl -s 127.0.0.1:9090/api/v1/targets | grep -o '"scrapeUrl":"[^"]*"\|"health":"[a-z]*"\|"lastError":"[^"]*"\|"scrapeInterval":"[^"]*"'
+"scrapeUrl":"http://127.0.0.1:9100/metrics"
+"lastError":""
+"health":"up"
+"scrapeInterval":"15s"
+"scrapeUrl":"http://localhost:9090/metrics"
+"lastError":""
+"health":"up"
+"scrapeInterval":"15s"
+
+[atguigu@centos100 ~]$ curl -sG 127.0.0.1:9090/api/v1/query --data-urlencode 'query=node_load1'
+{"status":"success","data":{"resultType":"vector","result":[{"metric":{"__name__":"node_load1","instance":"127.0.0.1:9100","job":"node_exporter"},"value":[1793089722.734,"0"]}]}}
+
+[atguigu@centos100 ~]$ curl -sG 127.0.0.1:9090/api/v1/query --data-urlencode 'query=count({__name__=~"node_.*"})'
+{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1793089792.163,"681"]}]}}
+
+[atguigu@centos100 ~]$ curl -sG 127.0.0.1:9090/api/v1/query --data-urlencode 'query=node_memory_MemAvailable_bytes / 1024 / 1024'
+{"status":"success","data":{"resultType":"vector","result":[{"metric":{"instance":"127.0.0.1:9100","job":"node_exporter"},"value":[1793089843.222,"1152.6640625"]}]}}
+
+[atguigu@centos100 ~]$ free -m
+              total        used        free      shared  buff/cache   available
+Mem:           1980         666         747          12         566        1152
+Swap:          2047           0        2047
+```
+
+结论与判读：
+
+- 两个 target 均 `health=up`、`lastError` 为空、`scrapeInterval=15s`；`scrapeUrl` = 协议 + instance + 默认 `metrics_path`。第二个目标是 Prometheus 抓自己。
+- `count({__name__=~"node_.*"})` = **681**，与 `/metrics` 上 `grep -c '^node_'` 的 681 精确相等 → 两条独立路径互证。**`/metrics` 每行是一条序列的当前样本，不是"一个指标名"，故 681 行 = 681 条序列。** 早前"序列数千位量级"的说法已被实测否定。
+- `node_memory_MemAvailable_bytes/1024/1024` = `1152.6640625`，`free -m` available = `1152`（整数截断）→ 吻合，全链路验证通过。
+- `node_load1` = 0，机器空闲。
+- 返回的 `metric` 里**没有 `__name__`**（算术运算清除指标名，标签保留）；`count()` 返回 `"metric":{}`（标签被聚合掉）。
+
+## 2026-10-27 Grafana 10.4.19 安装与启动（用户已执行）
+
+```text
+[atguigu@centos100 grafana-v10.4.19]$ ./bin/grafana server --version
+Version 10.4.19 (commit: 5e7a8b1652847effdfaf023485dc7601675da672, branch: HEAD)
+
+[atguigu@centos100 ~]$ ls -d ~/grafana-*/
+/home/atguigu/grafana-v10.4.19/
+
+$ sudo useradd --system --no-create-home --shell /bin/false grafana
+$ id grafana
+uid=984(grafana) gid=977(grafana) 组=977(grafana)
+
+$ ls -ld /usr/local/grafana /etc/grafana /var/lib/grafana
+drwxr-xr-x. 2 root root 6 10月 27 19:28 /etc/grafana
+drwxr-xr-x. 2 root root 6 10月 27 19:28 /usr/local/grafana
+drwxr-xr-x. 2 root root 6 10月 27 19:28 /var/lib/grafana
+
+$ ls /usr/local/grafana && ls -l /usr/local/grafana/bin
+bin  conf  plugins-bundled  public  VERSION
+-rwxr-xr-x. 1 atguigu atguigu 203779136 5月  22 2025 grafana
+-rwxr-xr-x. 1 atguigu atguigu   2463904 5月  22 2025 grafana-cli
+-rwxr-xr-x. 1 atguigu atguigu   2463936 5月  22 2025 grafana-server
+
+$ getenforce
+Enforcing
+$ systemctl is-active firewalld
+active
+
+$ grep -nE '^(data|reporting_enabled|check_for_updates) =' /etc/grafana/grafana.ini
+19:data = /var/lib/grafana
+250:reporting_enabled = false
+260:check_for_updates = false
+
+$ systemctl status grafana-server --no-pager
+   Loaded: loaded (/etc/systemd/system/grafana-server.service; enabled; vendor preset: disabled)
+   Active: active (running) since 二 2026-10-27 20:18:24 CST; 17s ago
+ Main PID: 5091 (grafana)
+    Tasks: 12
+   Memory: 205.3M
+
+$ sudo ss -lntp | grep 3000
+LISTEN     0      1024      [::]:3000                  [::]:*                   users:(("grafana",pid=5091,fd=9))
+
+$ curl -s 127.0.0.1:3000/api/health
+{
+  "commit": "5e7a8b1652847effdfaf023485dc7601675da672",
+  "database": "ok",
+  "version": "10.4.19"
+}
+```
+
+结论与判读：
+
+- `uid=984 gid=977` 在系统账号区间（201–999）；三目录 `size 6` 是 XFS 空目录特征。
+- **属主遗留问题**：`cp -a` 保留源属主，`bin/` 下仍是 `atguigu:atguigu`，需 `chown -R root:root /usr/local/grafana`。
+- `database: ok` 是核心信号：证明 `data = /var/lib/grafana` 生效、目录权限正确。
+- `Memory: 205.3M` 比 Prometheus 的 18.1M 重一个数量级；`Tasks: 12` 是线程数；`fd=9` 比 Prometheus 的 `fd=7` 多 2 个。
+- SELinux `Enforcing` 未拦截（`usr_t` → `unconfined_service_t`）；firewalld `active` 导致 Windows 侧访问 3000 返回 `HTTP 000`，需放行。
+
+## 2026-10-27 晚：3000 放行、属主补正与数据源（已回传）
+
+```bash
+$ sudo chown -R root:root /usr/local/grafana
+$ sudo chown root:root /etc/grafana/grafana.ini
+$ sudo firewall-cmd --permanent --add-port=3000/tcp
+success
+$ sudo firewall-cmd --reload
+success
+$ firewall-cmd --list-ports
+3000/tcp
+
+$ free -m
+              total        used        free      shared  buff/cache   available
+Mem:           1980         775          90          17        1114        1012
+```
+
+- Windows 侧实测（放行前 `HTTP 000`，放行后）：`GET http://192.168.6.100:3000/api/health` 返回 `{"database":"ok",...}`；`GET /login` 返回 `HTTP 200`（37676 字节，6ms），对照成立。
+- `available 1012 MiB`：Grafana 装上后从 1152 降到 1012，消耗约 140M，与 RSS 205.3M 大致吻合；`free 90` 不用管，判断余量看 `available`。
+- 浏览器配置数据源（中文界面）：`连接` → `数据源` → Add Prometheus，URL 填 `http://127.0.0.1:9090`（同机走回环）→ `保存并测试`。Explore 查 `up`：`A 即时: 2 条`、`Step: 15s`——三段链路全通。两个卡点：不加查询一直显示"没有数据"；默认`生成器`模式敲不了 PromQL，必须切`代码`。
+
+## 2026-11-02/06 Grafana 面板 1860 导入验收（浏览器操作）
+
+```text
+浏览器：http://192.168.6.100:3000/dashboard/import
+上传：C:\Users\陈伟钜\Downloads\node-exporter-full-1860.json（468,600 字节，Windows 侧已下载）
+数据源：prometheus → 导入
+```
+
+验收（两轮截图回传，2026-11-02 首看 + 2026-11-06 复看）：
+
+- 面板正常加载，CPU/内存/磁盘/网络四区块均有实时曲线，无报错、无 No data。
+- 能出数即证明 `label_values(node_uname_info, job)` 已匹配 `node_exporter`（1860 查询带 `job="$job"` 过滤）；下拉取值未单独截图核对，记为推断。
+- 读数与基线一致：根分区约 38%、Swap 0、负载接近 0；曲线空段对应 10-24～10-27 停机，Prometheus 不回填属正常。
+
+结论：**监控栈四层（采集→存储→查询→展示）全部闭环**，Grafana 小节收尾。下一步：Alertmanager（9093）+ 告警规则 → 故障演练。

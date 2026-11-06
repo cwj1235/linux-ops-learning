@@ -1006,4 +1006,86 @@ GitHub Actions 或同类流水线，实现测试、构建、镜像或发布、�
 - **未完成**：向 `/etc/prometheus/prometheus.yml` 追加 `job_name: "node_exporter"`（目标 `127.0.0.1:9100`）的命令已下发，用户尚未执行/回传。因此当前 9090 上只有 prometheus 自监控 **1 个**目标 UP；**不能声称 node_exporter 已被 Prometheus 抓取**。改配置前的带时间戳备份（`prometheus.yml.bak-$(date +%Y%m%d-%H%M%S)`）是否执行亦未回传。
 - 已知限制：未加 `--web.enable-lifecycle` → `POST /-/reload` 返回 403，改配置只能 `systemctl restart`；`LimitNOFILE` 未设（当前 2 个目标够用，目标上百再调）；9090 监听 `[::]` 即全部网卡且**无任何认证**，机器必须保持隔离、不得暴露公网；Grafana 3000、Alertmanager 9093、告警规则、`/targets` 网页验收均未开始。
 - 概念澄清（用户本轮提问）：TSDB = 时序数据库，采样点 = 指标名 + 标签集 + 数值 + 时间戳，指标名与标签集完全相同的一串点才是一条序列；只追加、不 UPDATE/DELETE、无事务、自动过期、高压缩。DBA 权限指管理数据库本身（DDL、GRANT、SUPER、SHUTDOWN），业务账号只应有单库 DML；文件系统分权是同一原则的另一种形态。
+- Git：本次归档已提交 `fbbdf92`（5 files changed, 274 insertions, 4 deletions）并推送，输出 `9a0716b..fbbdf92 main -> main`。`scripts/args_demo.py`、`学习总结/ops_mysql_basics.md` 未纳入本次提交（stat-dirty、`git diff --numstat` 为空、无内容差异）；`.workbuddy/` 为未跟踪目录，建议加入 `.gitignore` 而非提交。
+
+## 2026-10-24 node_exporter 抓取接入完成（两条 up=1，Prometheus 小节收尾）
+
+- 上一轮遗留的「追加 job + 重启 + up 验收」已全部执行并回传：`sudo tee -a` 追加 `- job_name: "node_exporter"` / `static_configs` / `- targets: ["127.0.0.1:9100"]`（2/4/6 空格缩进）→ `promtool check config` 输出 `SUCCESS: /etc/prometheus/prometheus.yml is valid prometheus config file syntax` → `systemctl restart prometheus` → `journalctl` 无 `Error loading config` → `curl .../query?query=up` 返回**两条 `"1"`**：`job="prometheus" instance="localhost:9090"` 与 `job="node_exporter" instance="127.0.0.1:9100"`。**node_exporter 已被抓取，本节主线完成。**
+- 重启副作用：MainPID `6471 → 3917`。`systemctl restart` 是 stop+start，必然换新 PID，`journalctl` 的 `prometheus[3917]` 与之一致；不要把 PID 变化当成异常。
+- 持久化证据（本次最有价值的一条）：启动日志出现 4 条 `Found healthy block` + `Replaying WAL ... WAL replay completed total_replay_duration=281.801809ms` → 昨夜写入的数据已压缩成块并成功加载，**重启不丢数据有实测证据**。块 ulid：`01M5P6131NQYBNQJCB11DESMKS`（10-23 17:55→20:00）、`01M5P612XYVJKT1VEAWPB7KEXV`（20:00→22:00）、`01M5P612Z5VWRVESKRBJE9966Y`（22:00→10-24 00:00）、`01M5PCWT53GYFV286H6B798PK8`（10-24 12:27→14:00）。
+- 块的 `maxt - mint = 7200000 ms = 2 小时`，**实测印证**了「`chunks_head` 攒约 2 小时压缩成一个块目录」的说法，不再是文档转述。
+- 断档：块覆盖 00:00 之后直接跳到 12:27，而今日 journal 从 `13:26:28` 才开始 → 中间虚拟机未运行（或开机时时钟未同步）。Prometheus **不回填停机期间数据**，重启后从当前时刻继续；查询该时段会看到空段，属正常。
+- 新增可复述结论：`up` 是**每次抓取生成一个样本**（1=成功、0=失败）的合成指标，不是被监控端的指标；`job` 来自配置的 `job_name`，`instance` 来自 `targets` 里的地址字面值（所以是 `localhost:9090` 与 `127.0.0.1:9100`，两者写法不同但都是本机）。
+- 其他日志细节：`updated GOGC old=100 new=75`（2.53 启动时按自身策略调 GC 目标，非配置错误）；`fs_type=XFS_SUPER_MAGIC`（数据目录在 XFS，与早前「空目录显示 size 6」同源）；`Completed loading of configuration file ... scrape=1.814627ms` 说明配置解析只花毫秒级。
+- 已知限制不变：无 `--web.enable-lifecycle` → 改配置只能 `systemctl restart`；9090 监听 `[::]` 且**无认证**，机器必须保持隔离。
+- 下一步：Grafana。CentOS 7 + 内核 3.10.0-1160 这组环境有 Grafana 10.4.x 的成功部署记录（官方 requirements 只写「Red Hat / RHEL / Fedora」，未点名 CentOS 7），倾向 10.4.x 而非最新版；内存余量约 1.2G，Grafana 最低要求 512M，装完需盯 `Memory:` 实测值。
+- 文档：`学习总结/ops_monitoring_basics.md` 新增第七节（抓取任务接入、日志证据链、块与断档、第一条 PromQL）；handoff 与 command_history 同步更新。
+
+## 2026-10-27 数据面三层验收全部通过（可进 Grafana）
+
+- 第一层目标状态：两个 target 均 `"health":"up"`、`"lastError":""`、`"scrapeInterval":"15s"`；`scrapeUrl` 分别为 `http://127.0.0.1:9100/metrics` 与 `http://localhost:9090/metrics`（第二个是 Prometheus 抓自己）。
+- 第二层入库规模：`count({__name__=~"node_.*"})` = **681**，与 node_exporter `/metrics` 上 `grep -c '^node_'` 的 681 精确相等，两条独立路径互证。
+- 第三层数值可信：`node_memory_MemAvailable_bytes / 1024 / 1024` = `1152.6640625`，`free -m` available = `1152`（整数截断），吻合。**采集→存储→查询全链路验证完成。**
+- `node_load1` = 0，机器空闲，符合实验机预期。
+- **纠错（重要）**：上一轮我说「681 行是指标行、序列数是千位量级」是错的。`/metrics` 每行是**一条序列的当前样本**，所以 681 行就是 681 条序列；指标**名**数远小于此。已在笔记 7.8 更正，并记入「预测偏高约 30%，具体数字先量再说」。
+- 两个 PromQL 细节：① **算术运算会清除指标名**（`__name__` 消失，`instance`/`job` 保留），因为单位已变、挂原名会误导；② `count()` 返回 `"metric":{}`（标签全聚合掉），要看分实例用 `count by (instance)`。
+- Grafana 选版已核实：`https://dl.grafana.com/oss/release/grafana-10.4.19.linux-amd64.tar.gz` 返回 200，`Content-Length: 120000970`（≈114 MiB）。10.4.2/10.4.5/11.0.0 同样可下。选 **10.4.19**（10.4 线最后一版，补丁最多，仍属 RHEL 7 时代）。Go 1.22 产物在本机内核 3.10 上可跑有先例（Prometheus 2.53.0 即 go1.22.4 构建）。
+- 内存余量 1152 MiB，Grafana 最低 512 MB，可装但需装后核对 `systemctl status` 的 `Memory:`；必要时调 `--storage.tsdb.retention` 或降低抓取频率。
+
+## 2026-10-27 Grafana 包下载：Windows 侧进行中（用户选择本机下载）
+
+- 用户选择「在 Windows 下载再传进虚拟机」。包落在 `C:\Users\陈伟钜\Downloads\grafana-10.4.19.linux-amd64.tar.gz`，目标大小 `120000970` 字节，官方 sha256 `110006a65a90195bcb7fe5a8b53ca152a26b6179454a5fd137be093c24244ef8`（`.sha256` 旁文件实测可下；`.sha256sum` 为 404）。
+- 首次下载在 8,708,852 字节处失败：`curl: (56) schannel: server closed abruptly (missing close_notify)`，均速约 41 KB/s。`--retry 3` 未生效——**curl 的 `--retry` 不覆盖错误码 56**，需 `--retry-all-errors`（7.71+，本机 8.21 有、CentOS 7 的 7.29 没有）。已改为「外层循环 + `-C -` + `--retry-all-errors`」后台续传。
+- `schannel` 是 Windows 自带 TLS 后端，要求规范的 `close_notify`；同一地址在 Linux 上通常不报此错，属平台差异而非文件损坏。
+- 国内镜像全部不可用：TUNA 连不上（000）、USTC 与阿里云 404。**Grafana 没有主流国内镜像**，只能走 `dl.grafana.com`。
+- 下一步：等下载完成 → Windows 侧 `certutil -hashfile ... SHA256` 核对 → `scp` 传进虚拟机（需先 `hostname -I` 取 IP）→ 虚拟机侧 `ls -l` 与 `sha256sum` 二次核对 → `tar -xzf` → `./bin/grafana server --version`。
+
+## 2026-10-27 Grafana 包已下载并校验通过（Windows 侧完成）
+
+- 最终结果：`C:\Users\陈伟钜\Downloads\grafana-10.4.19.linux-amd64.tar.gz`，**120,000,970 字节**，与 `Content-Length` 精确一致。
+- `certutil -hashfile ... SHA256` = `110006a65a90195bcb7fe5a8b53ca152a26b6179454a5fd137be093c24244ef8`，**与官方 `.sha256` 完全一致**。文件完整性已确认，可直接传进虚拟机。
+- 过程：首次失败于 8,708,852 字节（`curl: (56) schannel`）；改「循环 + `-C -` + `--retry-all-errors`」续传，中途又遇 `curl: (18) end of response with 58275135 bytes missing`，但每次续传都保留进度；累计约 1h17m 到 114,445,451 字节（95.4%），最后 5,555,519 字节用 4m29s 续完。
+- **教训**：判断进度要看**本地文件大小**，不要拿 curl 报的 "missing bytes" 反推——那条 `(18)` 是某一轮的错误快照，不是最终状态。我据此误判为 51%，差点让用户从 0 重下。
+- 平台差异确认：`schannel` 报错是 Windows TLS 后端特性，同一地址在 Linux 上不出现；`--retry-all-errors` 是 Windows 侧能用的补救，CentOS 7 的 curl 7.29 没有该参数。
+- 待用户执行：虚拟机 `hostname -I` 取 IP → Windows `scp` 传输 → 虚拟机侧 `sha256sum` 复核 → `tar -xzf` → `./bin/grafana server --version`。
+
+## 2026-10-27 Grafana 10.4.19 安装完成（3000 已监听，database ok）
+
+- 传输与校验：`scp` 到 `~/`（IP 只能选 `192.168.6.100`，另两个 `192.168.122.1`/`172.17.0.1` 是 libvirt 与 docker 网桥，Windows 不可达），虚拟机侧 `sha256sum` 与官方值一致。
+- **解压目录名 ≠ 包名**：包是 `grafana-10.4.19.linux-amd64.tar.gz`，解压后是 `grafana-v10.4.19/`。用户按包名拼路径报"没有那个文件或目录"，哈希其实没问题。
+- `./bin/grafana server --version` → `Version 10.4.19 (commit: 5e7a8b16..., branch: HEAD)`，在 CentOS 7 内核 3.10 上可运行。
+- 安装终态：账号 `grafana`（uid=984 gid=977）；`/usr/local/grafana`（bin/conf/public/plugins-bundled/VERSION）、`/etc/grafana/grafana.ini`、`/var/lib/grafana`（归 grafana）；unit `/etc/systemd/system/grafana-server.service`（`Type=simple`，非官方 RPM 的 `notify`，避免 systemd 219 卡在 activating）；`enable --now` 后 `active (running)`、`enabled`、MainPID 5091、`Tasks: 12`、**`Memory: 205.3M`**。
+- 验证：`ss` → `[::]:3000`（`fd=9`）；`/api/health` → `{"commit":"5e7a8b16...","database":"ok","version":"10.4.19"}`。**`database: ok` 证明 data 路径与目录权限正确**。
+- 配置只改三处：`data = /var/lib/grafana`（必须，否则落到 root 的 homepath/data 写不进去）、`reporting_enabled = false`、`check_for_updates = false`。
+- **遗留未做**：`chown -R root:root /usr/local/grafana` 用户跳过了，bin 下仍是 `atguigu:atguigu`（`cp -a` 保留源属主）。功能不受影响，但违反"程序归 root"原则，需补。
+- **firewalld active，3000 未放行**：从 Windows 侧实测 `HTTP 000`（连接未建立）。需 `firewall-cmd --permanent --add-port=3000/tcp` + `--reload`。
+- SELinux `Enforcing` 但未拦截：`/usr/local` 下二进制标签 `usr_t`，进程落在 `unconfined_service_t`，不受策略约束；与 Nginx 的 `httpd_t` 情形不同，判断看 `ps -eZ`。
+- 内存：Grafana 占 205.3M，装前 available 1152 MiB，装后待 `free -m` 复核。
+- 下一步：放行 3000 → 浏览器登录改密码 → 配 Prometheus 数据源（`http://127.0.0.1:9090`）→ 导入 Node Exporter 面板（ID 1860）→ Alertmanager/告警规则。
+
+## 2026-10-27 Grafana 3000 已放行并从 Windows 验证可达
+
+- `firewall-cmd --permanent --add-port=3000/tcp` + `--reload` → `success`，`--list-ports` = `3000/tcp`。
+- **Windows 侧实测**：`GET http://192.168.6.100:3000/api/health` → `{"commit":"5e7a8b16...","database":"ok","version":"10.4.19"}`；`GET /login` → `HTTP 200`、37676 字节、**6ms**（内网直连，无代理）。放行前同一地址为 `HTTP 000`，对照成立。
+- `free -m`：total 1980、used 775、free 90、buff/cache 1114、**available 1012**。Grafana 装上后 available 从 1152 → 1012，消耗约 140M，与 RSS 205.3M 大致吻合。**`free 90` 不用管**，Linux 用空闲内存做缓存；判断余量看 `available`。
+- `chown -R root:root /usr/local/grafana` 与 `chown root:root /etc/grafana/grafana.ini` 已执行，`ls -l` 待回读确认。
+- 下一步：浏览器 `admin`/`admin` 登录改密码 → `Data sources` 加 Prometheus（URL 用 `http://127.0.0.1:9090`，同机走回环）→ `Save & test` → `Explore` 跑 `up` 应见两条序列 → 导入面板 1860（VM 出网慢，失败则改用 Windows 侧下 JSON 上传）。
+
+## 2026-10-27 Grafana 数据源打通，Explore 返回 2 条序列
+
+- 用户在中文界面完成：`探索` → 数据源 `prometheus` → `+ 添加查询` → 查询行最右把 `生成器` 切 `代码` → 输入 `up` → 运行。
+- **实测结果**：`A 即时: 2 条`、`Expr: up`、`Step: 15s`、响应 213 行。**监控栈三段链路（采集→存储→展示）全部打通。**
+- 判读：`Step: 15s` 与 Prometheus `scrapeInterval` 一致；图表看似空白是因为底部 `查询检查器` 压扁了图表区，关掉即可。
+- 两个卡点已记录：① 不加查询会一直显示"没有数据"；② 默认 `生成器` 模式敲不了 PromQL，必须切 `代码`。中文界面标签：探索/添加查询/运行查询/生成器/代码/数据源/仪表盘/导入/保存并测试。
+- 面板 1860 已在 Windows 侧下载：`C:\Users\陈伟钜\Downloads\node-exporter-full-1860.json`，468,600 字节，revision 45，110 个 timeseries 面板。**该面板不硬编码 `job="node"`**，`job` 由 `label_values(node_uname_info, job)` 自动发现，可匹配 `node_exporter`。
+- 下一步：`/dashboard/import` 上传 JSON → 数据源选 `prometheus` → 导入 → 检查 `job` 与 `nodename` 下拉框自动选中 → 看 CPU/内存/磁盘/网络四块。
 - 归档事故（2026-10-22）：本文件与 `ops_handoff.md` 在 13:03 左右从工作区消失，随后被当成「删除」提交并推送（2358f91）。已从 `012a653` 恢复并按上下文重建 10-10 之后的记录；重建内容来自当日回传证据，非逐字复制。排查方向：同一目录存在其他会话/程序写入痕迹（`pelican-motorcycle.html`、`scripts/args_demo.py`、`ops_mysql_basics.md` 同时变动）。
+
+## 2026-11-02/06 面板 1860 导入验收通过（Grafana 小节收尾）
+
+- 用户于 2026-11-02 在 Windows 浏览器完成导入：`http://192.168.6.100:3000/dashboard/import` 上传 `C:\Users\陈伟钜\Downloads\node-exporter-full-1860.json`，数据源选 `prometheus`；2026-11-06 又翻看面板下方区块。两轮回传截图均为面板正常出数：CPU/内存/磁盘/网络四区块有实时曲线，无报错、无 No data。
+- `job` 下拉的取值未单独截图核对；但 1860 面板查询都带 `job="$job"` 过滤，能出数即证明 `label_values(node_uname_info, job)` 已发现 `node_exporter`。此为推断，依据已写明，不写成直读结论。
+- 面板读数与既有基线一致（根分区约 38%、Swap 0、负载接近 0）；曲线空段对应 10-24～10-27 停机，Prometheus 不回填，不是故障。
+- **监控栈四层闭环完成：node_exporter 采集（9100）→ Prometheus 存储查询（9090）→ Grafana 展示（3000）。** Grafana 小节（Windows 下载校验、安装、放行 3000、数据源、面板导入）全部收尾，不要重做。
+- 下一步：Alertmanager（9093）+ 告警规则（先概念后落地），最后故障演练：停 node_exporter 看 `up` 从 1 变 0、观察告警触发与 `for` 抑制，演练后拉起服务。
+- Git：截至本条归档，工作区 7 个文件已修改未提交（README、监控笔记、三份项目记录，覆盖 10-27 至 11-06 的记录），待用户在 Windows 终端提交推送；`.workbuddy/`、`.workbuddy-ai/` 未跟踪，建议加入 `.gitignore` 而非提交。提交前按 10-22 事故教训先 `git status --short` 逐条核对，`git add` 显式列路径。

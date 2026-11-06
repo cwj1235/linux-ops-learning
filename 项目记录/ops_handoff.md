@@ -1949,6 +1949,7 @@ Linux 运维强化基础检查已经完成。下一步可先做一次阶段复�
 - **未完成**：追加 `job_name: "node_exporter"`（`127.0.0.1:9100`）的命令已下发，用户**尚未执行/回传**；改配置前的带时间戳备份是否执行也未回传。因此 9090 上**只有 prometheus 自监控 1 个目标 UP**，不能称 node_exporter 已被抓取。
 - 已知限制：无 `--web.enable-lifecycle` → `POST /-/reload` 返回 403，改配置只能 `systemctl restart`；`LimitNOFILE` 未设；9090 无认证且监听全部网卡，机器必须隔离；Grafana、Alertmanager、告警规则、`/targets` 网页验收都未开始。
 - 文档：`学习总结/ops_monitoring_basics.md` 新增第六节（默认配置体检、目录三分法、unit 逐行、四项验证、三个细节、安全与后续），并已回填 5.5 的体检结果。
+- Git：记录已提交 `fbbdf92` 并推送（`9a0716b..fbbdf92 main -> main`），5 个文件、274 行新增。未纳入：`scripts/args_demo.py`、`学习总结/ops_mysql_basics.md`（stat-dirty，无内容差异）、`.workbuddy/`（未跟踪，建议 gitignore）。
 
 ## 当前下一步（最新）
 
@@ -1956,4 +1957,41 @@ Linux 运维强化基础检查已经完成。下一步可先做一次阶段复�
 2. 然后 `sudo systemctl restart prometheus` + `journalctl -u prometheus -l -n 25 --no-pager`，看 `Loading WAL`/`Replaying WAL`（重启不丢数据的证据）与 `Server is ready to receive web requests.`，且不得出现 `Error loading config`。
 3. 再用 `curl -s '127.0.0.1:9090/api/v1/query?query=up'` 确认两条 `up=1`（`job="prometheus"`、`job="node_exporter"`）——这是第一条 PromQL。
 4. 之后：Grafana（3000 未占用）→ Alertmanager/告警规则（9093）→ 故障演练（停 node_exporter 看 `up` 变 0、观察 `for` 抑制）。
-5. 不要重做本节已完成动作（建账号、建目录、拷文件、写 unit、四次验证）；重复执行前先读本节终态。
+
+## 2026-10-24 node_exporter 抓取接入完成（上文 1～3 已全部执行）
+
+- 已回传并确认：`promtool check config` → `SUCCESS`；`systemctl restart prometheus` 后日志无 `Error loading config`，有 `WAL replay completed`（281.8ms）与 `Server is ready to receive web requests.`；`query?query=up` 返回**两条 `"1"`**（`job="prometheus"`、`job="node_exporter"`）。上文第 1～3 条**不要重做**。
+- 环境终态变化：MainPID `6471 → 3917`（restart 必然换 PID）；数据目录新增 4 个块目录（`01M5P6131NQYBNQJCB11DESMKS` / `01M5P612XYVJKT1VEAWPB7KEXV` / `01M5P612Z5VWRVESKRBJE9966Y` / `01M5PCWT53GYFV286H6B798PK8`），每块 2 小时，印证 `chunks_head` → 块目录的压缩周期。
+- 数据断档：块覆盖到 10-24 00:00 后直接跳到 12:27，今日 journal 从 13:26:28 开始 → 中间虚拟机未运行。Prometheus 不回填停机数据，属正常，不要当成故障。
+
+## 当前下一步（2026-10-27 更新：数据面验收已通过）
+
+1. 三层验收全部通过，**不要重做**：targets 两个 up / 无 lastError / 15s；`count({__name__=~"node_.*"})` = 681（与 `/metrics` 的 `grep -c '^node_'` 相等）；`node_memory_MemAvailable_bytes/1024/1024` = 1152.66，`free -m` available = 1152。
+2. Grafana 包**已下载并校验通过**，不要再下载：`C:\Users\陈伟钜\Downloads\grafana-10.4.19.linux-amd64.tar.gz`，`120000970` 字节，SHA256 `110006a65a90195bcb7fe5a8b53ca152a26b6179454a5fd137be093c24244ef8`（与官方 `.sha256` 一致）。下一步：虚拟机 `hostname -I` 取 IP → Windows 侧 `scp` 传入 `~/` → 虚拟机侧 `ls -l` 与 `sha256sum` 复核 → `tar -xzf` → `./bin/grafana server --version`。
+3. 安装形态延续本机风格：tarball + 自建 systemd unit + 专用账号 `grafana`，不走 yum 源。落地路径建议 `/usr/local/grafana`，数据与插件目录归 `grafana` 账号，配置文件改 `/etc/grafana/grafana.ini` 或在 unit 里用 `--config`。
+4. 内存边界：available 1152 MiB，Grafana 最低 512 MB。装完必须看 `systemctl status grafana-server` 的 `Memory:`；若吃紧，优先降 Grafana 的 `[dashboards]`/`[alerting]` 相关开销，或调 `--storage.tsdb.retention.time`（Prometheus 侧）。
+5. 之后：配置 Prometheus 数据源（`http://127.0.0.1:9090`）→ 导入 Node Exporter 面板（Grafana 官网 ID 1860）→ Alertmanager（9093）与告警规则。
+6. 不变的限制：9090/9100 均监听 `[::]` 且无认证，虚拟机保持隔离；Prometheus 无 `--web.enable-lifecycle`，改配置只能 `systemctl restart`。
+7. 能力边界：`localhost` 与 `centos100` 是同一台虚拟机的两个清单身份；所有结论只来自该机回传输出，助手未连接虚拟机代做操作。
+
+## 当前下一步（2026-10-27 晚：Grafana 已安装并运行）
+
+1. Grafana 10.4.19 已装好并 `active (running)`：MainPID 5091、`Tasks: 12`、`Memory: 205.3M`、`enabled`、`[::]:3000`（`fd=9`）、`/api/health` 返回 `database: ok`。**不要重装**，重复执行前先读本节终态。
+2. 遗留两件事**已完成**（2026-10-27 20:28）：
+   - `chown -R root:root /usr/local/grafana` 已执行（`ls -l` 待用户回读确认）。
+   - `firewall-cmd --permanent --add-port=3000/tcp` + `--reload` 已执行，`--list-ports` 输出 `3000/tcp`；**从 Windows 侧实测 `/api/health` 返回 `database: ok`、`/login` 返回 `HTTP 200`（37676 字节，6ms）**，3000 已可访问。
+3. **数据源已配好并验证**（2026-10-27 21:00）：Explore 跑 `up` 返回 `A 即时: 2 条`、`Step: 15s`，三段链路全通。**不要重配数据源。**
+4. 下一步：导入面板 1860。JSON 已下到 `C:\Users\陈伟钜\Downloads\node-exporter-full-1860.json`（468,600 字节，revision 45，110 面板），走 `http://192.168.6.100:3000/dashboard/import` 上传，数据源下拉选 `prometheus`。该面板不硬编码 `job="node"`，`job` 由 `label_values(node_uname_info, job)` 自动发现。
+5. 之后：Alertmanager（9093）与告警规则 → 故障演练（停 node_exporter 看 `up` 变 0）。
+4. 环境终态：`/usr/local/grafana`（root）、`/etc/grafana/grafana.ini`（root，仅改 data/reporting_enabled/check_for_updates 三项）、`/var/lib/grafana`（grafana）。unit 用 `Type=simple`，`--homepath /usr/local/grafana --config /etc/grafana/grafana.ini`。
+5. 资源：Grafana 205.3M + Prometheus 18.1M + node_exporter 3.9M，装前 available 1152 MiB，需 `free -m` 复核余量。
+6. 限制不变：9090/9100/3000 均监听 `[::]`；9090 与 9100 无认证，3000 有登录但默认口令必须改；虚拟机保持隔离。
+
+## 当前下一步（2026-11-06 更新：面板 1860 已导入，Grafana 小节收尾）
+
+1. 面板 1860 已于 2026-11-02 导入并通过截图验收（CPU/内存/磁盘/网络四区块有数据、无报错），2026-11-06 复看读数与基线一致（根分区约 38%、Swap 0、负载接近 0）。**监控栈四层闭环：9100 采集 → 9090 存储查询 → 3000 展示。** Grafana 的下载、安装、放行、数据源、面板导入均已完成，**不要重做**。
+2. `job` 下拉取值未单独截图核对；但 1860 查询带 `job="$job"` 过滤，面板能出数即证明 `label_values(node_uname_info, job)` 已发现 `node_exporter`（推断，依据已写明）。
+3. 下一步主线：Alertmanager（9093）+ 告警规则。顺序：先讲概念（指标 → 规则 → 告警 → 路由/通知），再写规则文件并挂进 `prometheus.yml`，最后故障演练——停 node_exporter 亲眼看 `up` 从 1 变 0、告警触发与 `for` 抑制，**演练后拉起服务**。
+4. Git：7 个文件已修改未提交（10-27 至 11-06 的监控阶段记录），由用户在 Windows 终端按「`git status --short` 逐条核对 → 显式列路径 `git add` → commit → push」处理；`.workbuddy/`、`.workbuddy-ai/` 加进 `.gitignore`。提交时警惕整文件 `D`（10-22 归档事故的教训）。
+5. 不变的限制：9090/9100 无认证监听 `[::]`；3000 有登录；虚拟机保持隔离、不暴露公网。历史 PID/端口是快照，隔几天恢复学习时先 `systemctl is-active node_exporter prometheus grafana-server` 确认今日状态。
+
